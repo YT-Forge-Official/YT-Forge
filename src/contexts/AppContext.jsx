@@ -79,7 +79,10 @@ export const AppProvider = ({ children }) => {
       } else {
         console.error(`Error: ${result.error}`);
         setVideoDetails(null);
-        if (result.isAgeRestricted) setIsAgeRestricted(true);
+        if (result.isAgeRestricted) {
+          setIsAgeRestricted(true);
+          setIsAuthenticated(false);
+        }
         setFetchError(result.error);
       }
     } catch (error) {
@@ -164,7 +167,10 @@ export const AppProvider = ({ children }) => {
       } else {
         console.error(`Error: ${result.error}`);
         setPlaylistDetails(null);
-        if (result.isAgeRestricted) setIsAgeRestricted(true);
+        if (result.isAgeRestricted) {
+          setIsAgeRestricted(true);
+          setIsAuthenticated(false);
+        }
         setFetchError(result.error);
       }
     } catch (error) {

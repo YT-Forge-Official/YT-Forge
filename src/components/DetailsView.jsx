@@ -229,8 +229,17 @@ const DetailsView = () => {
           <div className="relative rounded-lg overflow-hidden bg-secondary group">
             <img
               src={details.thumbnailUrl}
-              className="w-full aspect-video object-cover"
+              className="w-full aspect-video object-cover bg-secondary/30"
               alt="Video Thumbnail"
+              onError={(e) => {
+                if (e.target.src.includes('maxresdefault')) {
+                  e.target.src = e.target.src.replace(/maxresdefault\.(jpg|webp)/, 'hqdefault.jpg');
+                } else if (e.target.src.includes('sd2.jpg') || e.target.src.includes('sddefault.jpg')) {
+                  e.target.src = e.target.src.replace(/sd2\.jpg|sddefault\.jpg/, 'hqdefault.jpg');
+                } else {
+                  e.target.style.opacity = 0;
+                }
+              }}
             />
             <button
               className="absolute bottom-2 right-2 flex items-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-2 py-1 text-[10px] text-white/80 hover:text-white hover:bg-black/80 transition-all opacity-0 group-hover:opacity-100 cursor-pointer border-none"

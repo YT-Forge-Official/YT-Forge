@@ -45,38 +45,48 @@ const AppContent = () => {
           onCancel={cancelFetchDetails}
           ytDlpStatus={ytDlpStatus}
           pendingFetch={pendingFetch}
+          isPlaylistMode={isPlaylistMode}
         />
       );
     }
     if (hybridPromptUrl) {
       return (
         <div className="flex flex-col items-center justify-center h-full gap-5">
-          <div className="flex flex-col items-center gap-4 max-w-md text-center bg-secondary/30 p-8 rounded-2xl border border-border/40">
-            <div className="space-y-2 mb-4">
-              <p className="text-xl font-semibold text-foreground">Multiple Items Found</p>
-              <p className="text-sm text-muted-foreground leading-relaxed px-4">
-                This link points to a specific video that is also part of a playlist. What would you like to download?
+          <div className="flex flex-col items-center gap-6 max-w-[500px] text-center bg-secondary/20 p-8 rounded-3xl border border-border/50 shadow-sm">
+            <div className="space-y-3">
+              <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-primary/10 mb-2">
+                <ListVideo className="h-7 w-7 text-primary" />
+              </div>
+              <p className="text-2xl font-bold tracking-tight text-foreground">Playlist Detected</p>
+              <p className="text-[15px] text-muted-foreground/90 leading-relaxed px-4">
+                The URL provided points to a video that is part of a larger playlist. How would you like to proceed?
               </p>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 w-full">
-              <Button 
-                variant="outline" 
-                className="h-24 flex flex-col items-center justify-center gap-2 border-border/60 hover:bg-secondary/60 hover:border-border transition-all"
+            <div className="grid grid-cols-2 gap-4 w-full mt-2">
+              <button 
+                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md"
                 onClick={() => handleHybridChoice('video')}
               >
-                <Film className="h-6 w-6 text-primary" />
-                <span className="font-medium">Just this Video</span>
-              </Button>
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Film className="h-8 w-8 text-foreground/70 group-hover:text-primary transition-colors z-10" strokeWidth={1.5} />
+                <div className="flex flex-col items-center gap-1 z-10">
+                  <span className="font-semibold text-foreground group-hover:text-primary transition-colors">Single Video</span>
+                  <span className="text-xs text-muted-foreground text-center">Download only the specific video</span>
+                </div>
+              </button>
               
-              <Button 
-                variant="outline" 
-                className="h-24 flex flex-col items-center justify-center gap-2 border-border/60 hover:bg-secondary/60 hover:border-border transition-all"
+              <button 
+                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md"
                 onClick={() => handleHybridChoice('playlist')}
               >
-                <ListVideo className="h-6 w-6 text-primary" />
-                <span className="font-medium">Whole Playlist</span>
-              </Button>
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <ListVideo className="h-8 w-8 text-foreground/70 group-hover:text-primary transition-colors z-10" strokeWidth={1.5} />
+                <div className="flex flex-col items-center gap-1 z-10">
+                  <span className="font-semibold text-foreground group-hover:text-primary transition-colors">Entire Playlist</span>
+                  <span className="text-xs text-muted-foreground text-center">Fetch all videos in the playlist</span>
+                </div>
+              </button>
             </div>
           </div>
           <Button

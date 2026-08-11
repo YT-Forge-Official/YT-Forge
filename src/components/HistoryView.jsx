@@ -14,8 +14,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2, ArrowUpCircle, Youtube, Loader2, LogOut, ListVideo } from 'lucide-react';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2, ArrowUpCircle, Youtube, Loader2, LogOut, ListVideo, ArrowLeft } from 'lucide-react';
 
 const GoogleIcon = (props) => (
   <svg viewBox="0 0 24 24" {...props}>
@@ -75,8 +75,121 @@ const HistoryView = () => {
   return (
     <div className="flex flex-col h-full">
 
-      {/* Header */}
-      <div className="flex items-center justify-between pb-4 mb-1">
+      {selectedPlaylistHistory ? (
+        <div className="flex flex-col h-full animate-in fade-in slide-in-from-right-4 duration-300">
+          <div className="flex-none border-b border-border/40 pb-4 mb-4">
+            <div className="flex items-start gap-3">
+              <Button variant="ghost" size="icon" onClick={() => setSelectedPlaylistHistory(null)} className="shrink-0 mt-0.5 h-8 w-8">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-xl font-bold truncate tracking-tight text-foreground flex items-center gap-2">
+                  {selectedPlaylistHistory.title}
+                </h2>
+                <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                  <span className="font-medium bg-secondary/50 px-1.5 py-0.5 rounded border border-border/40">Playlist</span>
+                  <span>•</span>
+                  <span>{selectedPlaylistHistory.downloadedVideos?.length} videos</span>
+                  <span>•</span>
+                  <span className="truncate hover:underline cursor-pointer" onClick={() => window.electronAPI.openFileLocation(selectedPlaylistHistory.path)}>
+                    {selectedPlaylistHistory.path}
+                  </span>
+                </div>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => window.electronAPI.openFileLocation(selectedPlaylistHistory.path)} className="shrink-0 gap-2 h-8 text-xs ml-2">
+                <FolderOpen className="h-3.5 w-3.5" />
+                Open Folder
+              </Button>
+            </div>
+          </div>
+          
+          <ScrollArea className="flex-1 -mx-2 px-2">
+            <div className="flex flex-col gap-2 pb-6">
+              {selectedPlaylistHistory.downloadedVideos?.map((v, i) => {
+                const formatDuration = (seconds) => {
+                  if (!seconds) return '';
+                  const h = Math.floor(seconds / 3600);
+                  const m = Math.floor((seconds % 3600) / 60);
+                  const s = seconds % 60;
+                  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                  return `${m}:${s.toString().padStart(2, '0')}`;
+                };
+
+                return (
+                  <div key={v.id || i} className="group flex items-stretch justify-between gap-4 p-2.5 rounded-xl border border-border/40 bg-secondary/10 hover:bg-secondary/30 transition-all hover:border-primary/20">
+                    <div className="relative w-[110px] aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
+                      <img 
+                        src={v.thumbnailUrl || ''} 
+                        alt="" 
+                        className="w-full h-full object-cover" 
+                        onError={(e) => {
+                          if (e.target.src.includes('maxresdefault')) {
+                            e.target.src = e.target.src.replace(/maxresdefault\.(jpg|webp)/, 'hqdefault.jpg');
+                          } else if (e.target.src.includes('sd2.jpg') || e.target.src.includes('sddefault.jpg')) {
+                            e.target.src = e.target.src.replace(/sd2\.jpg|sddefault\.jpg/, 'hqdefault.jpg');
+                          } else {
+                            e.target.style.opacity = 0;
+                          }
+                        }}
+                      />
+                      {v.duration && (
+                        <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold">
+                          {formatDuration(v.duration)}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1 flex flex-col gap-1 justify-center">
+                      <p className="text-sm font-semibold text-foreground truncate cursor-pointer hover:text-primary transition-colors hover:underline" onClick={() => window.electronAPI.openExternalLink(v.url)} title={v.title}>{v.title}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">{v.url}</p>
+                    </div>
+
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground/50 hover:text-white" onClick={() => window.electronAPI.openFileLocation(v.filePath || selectedPlaylistHistory.path)}>
+                              <FolderOpen className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            Open Folder
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground/50 hover:text-white" onClick={async () => {
+                              const newHistory = [...history];
+                              const historyItemIndex = newHistory.findIndex(h => h.timestamp === selectedPlaylistHistory.timestamp);
+                              if (historyItemIndex !== -1) {
+                                newHistory[historyItemIndex].downloadedVideos = newHistory[historyItemIndex].downloadedVideos.filter((_, index) => index !== i);
+                                setHistory(newHistory);
+                                await window.electronAPI.addHistoryItem(newHistory[historyItemIndex]);
+                                setSelectedPlaylistHistory({...newHistory[historyItemIndex]});
+                              }
+                            }}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            Remove
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        </div>
+      ) : (
+        <>
+          {/* Header */}
+          <div className="flex items-center justify-between pb-4 mb-1">
         <h2 className="text-lg font-semibold tracking-tight">
           Downloads
         </h2>
@@ -112,8 +225,8 @@ const HistoryView = () => {
               )}
             </Tooltip>
 
-            <AlertDialogContent className="sm:max-w-md bg-background border-border/40 shadow-xl p-0 overflow-hidden outline-none rounded-xl">
-              <div className="px-6 py-5 max-h-[80vh] overflow-y-auto">
+            <AlertDialogContent className="sm:max-w-md bg-background border border-border/30 shadow-2xl p-0 overflow-hidden outline-none rounded-xl">
+              <div className="p-6 max-h-[80vh] overflow-y-auto">
                 <AlertDialogHeader className="space-y-6">
                   {/* Settings Header */}
                   <div className="flex items-center justify-between">
@@ -160,9 +273,9 @@ const HistoryView = () => {
                         YouTube Authentication
                       </h3>
                       {isAuthenticated ? (
-                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-secondary/40 border border-border/50">
-                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          <span className="text-xs font-medium text-foreground/80">Signed In</span>
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 shadow-sm shadow-emerald-500/5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                          <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">Signed In</span>
                         </div>
                       ) : (
                         <span className="text-xs font-medium text-muted-foreground">
@@ -202,9 +315,6 @@ const HistoryView = () => {
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>
-                          <p className="text-[11px] text-muted-foreground/70 text-center">
-                            Note: Your session may expire automatically after ~30 days.
-                          </p>
                         </div>
                       ) : (
                         <div className="pt-1">
@@ -289,14 +399,23 @@ const HistoryView = () => {
                 <div className="relative shrink-0">
                   <img
                     src={item.thumbnailUrl}
-                    className="w-28 aspect-video rounded-md object-cover"
+                    className="w-28 aspect-video rounded-md object-cover bg-secondary/30"
                     alt=""
+                    onError={(e) => {
+                      if (e.target.src.includes('maxresdefault')) {
+                        e.target.src = e.target.src.replace(/maxresdefault\.(jpg|webp)/, 'hqdefault.jpg');
+                      } else if (e.target.src.includes('sd2.jpg') || e.target.src.includes('sddefault.jpg')) {
+                        e.target.src = e.target.src.replace(/sd2\.jpg|sddefault\.jpg/, 'hqdefault.jpg');
+                      } else {
+                        e.target.style.opacity = 0;
+                      }
+                    }}
                   />
                   {item.type === 'playlist' && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-md backdrop-blur-[1px]">
-                      <div className="flex flex-col items-center">
-                        <ListVideo className="h-6 w-6 text-white drop-shadow-md" />
-                        <span className="text-[10px] font-bold text-white mt-0.5 px-1.5 py-0.5 bg-black/60 rounded">
+                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center rounded-md transition-colors duration-200 group-hover:bg-black/50">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-black/50 backdrop-blur-md rounded-full border border-white/10 shadow-lg">
+                        <ListVideo className="h-4 w-4 text-white" />
+                        <span className="text-[10px] font-bold text-white tracking-wider">
                           {item.downloadedVideos?.length} VIDEOS
                         </span>
                       </div>
@@ -387,43 +506,8 @@ const HistoryView = () => {
         </div>
       </div>
       
-      {/* Playlist History Modal */}
-      <Dialog open={!!selectedPlaylistHistory} onOpenChange={(open) => { if (!open) setSelectedPlaylistHistory(null); }}>
-        <DialogContent className="sm:max-w-[500px] max-h-[85vh] p-0 flex flex-col overflow-hidden bg-background border-border/40">
-          {selectedPlaylistHistory && (
-            <>
-              <div className="p-6 pb-2 border-b border-border/40 bg-secondary/10">
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <ListVideo className="h-5 w-5 text-primary" />
-                    Playlist Batch
-                  </DialogTitle>
-                  <DialogDescription className="truncate mt-1.5" title={selectedPlaylistHistory.title}>
-                    <span className="font-semibold text-foreground/80">{selectedPlaylistHistory.title}</span>
-                    <br/>
-                    Saved to: <span className="font-mono text-[10px] text-muted-foreground/80 cursor-pointer hover:underline" onClick={() => window.electronAPI.openFileLocation(selectedPlaylistHistory.path)}>{selectedPlaylistHistory.path}</span>
-                  </DialogDescription>
-                </DialogHeader>
-              </div>
-              <ScrollArea className="flex-1 p-6 pt-4">
-                <div className="space-y-3">
-                   {selectedPlaylistHistory.downloadedVideos?.map((v, i) => (
-                      <div key={i} className="flex items-start justify-between gap-3 p-3 rounded-lg border border-border/40 bg-secondary/10 hover:bg-secondary/30 transition-colors">
-                        <div className="min-w-0 flex-1">
-                           <p className="text-sm font-medium text-foreground truncate" title={v.title}>{v.title}</p>
-                           <p className="text-xs text-muted-foreground hover:underline cursor-pointer truncate mt-0.5" onClick={() => window.electronAPI.openExternalLink(v.url)}>{v.url}</p>
-                        </div>
-                      </div>
-                   ))}
-                </div>
-              </ScrollArea>
-              <div className="p-4 border-t border-border/40 flex justify-end">
-                <Button variant="outline" onClick={() => setSelectedPlaylistHistory(null)}>Close</Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+        </>
+      )}
     </div>
   );
 };

@@ -2,7 +2,7 @@ import React from 'react';
 import { Loader2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-const LoadingComponent = ({ onCancel, ytDlpStatus, pendingFetch }) => {
+const LoadingComponent = ({ onCancel, ytDlpStatus, pendingFetch, isPlaylistMode }) => {
   const showUpdateStage = pendingFetch && (ytDlpStatus === 'checking' || ytDlpStatus === 'downloading');
 
   return (
@@ -16,7 +16,7 @@ const LoadingComponent = ({ onCancel, ytDlpStatus, pendingFetch }) => {
         <span className="text-sm font-medium text-foreground/80">
           {showUpdateStage
             ? ytDlpStatus === 'downloading' ? 'Updating packages' : 'Checking packages'
-            : 'Fetching Video Info'}
+            : isPlaylistMode ? 'Fetching Playlist Info' : 'Fetching Video Info'}
         </span>
         <span className="text-xs text-muted-foreground/60">
           {showUpdateStage
