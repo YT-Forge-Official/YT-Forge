@@ -39,6 +39,11 @@
 }
 
 /* --- Global Reset & Base --- */
+
+.root {
+  background-color: black;
+}
+
 @layer base {
   * {
     border-color: var(--color-border);

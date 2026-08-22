@@ -188,7 +188,7 @@ const AppContent = () => {
 function App() {
   return (
     <AppProvider>
-      <TooltipProvider delayDuration={300}>
+      <TooltipProvider delayDuration={0}>
         <AppContent />
       </TooltipProvider>
     </AppProvider>

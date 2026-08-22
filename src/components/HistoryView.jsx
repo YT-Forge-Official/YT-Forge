@@ -390,9 +390,9 @@ const HistoryView = () => {
       <div className="flex-1 overflow-y-auto min-h-0">
         <div className="flex flex-col gap-2.5">
           {history.length > 0 ? (
-            history.map((item) => (
+            history.map((item, index) => (
               <div
-                key={item.timestamp}
+                key={`${item.timestamp}-${index}`}
                 className="group flex items-center gap-4 rounded-lg p-3 hover:bg-secondary/40 transition-colors min-w-0"
               >
                 {/* Thumbnail */}

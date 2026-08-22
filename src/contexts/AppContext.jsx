@@ -97,19 +97,6 @@ export const AppProvider = ({ children }) => {
     }
   }, []); // stable — uses refs internally
 
-  // When yt-dlp finishes and there's a pending fetch queued, auto-trigger it
-  const pendingFetchRef = useRef(pendingFetch);
-  pendingFetchRef.current = pendingFetch;
-
-  useEffect(() => {
-    const done = !ytDlpStatus || ytDlpStatus === 'updated' || ytDlpStatus === 'up-to-date' || ytDlpStatus === 'error';
-    if (!done) return;
-    if (!pendingFetchRef.current) return;
-    setPendingFetch(false);
-    // Brief delay so the "up to date" indicator renders for a moment
-    const timer = setTimeout(() => runFetch(), 500);
-    return () => clearTimeout(timer);
-  }, [ytDlpStatus, runFetch]);
 
   const isYtDlpBusy = ytDlpStatus === 'checking' || ytDlpStatus === 'downloading';
 
@@ -120,6 +107,17 @@ export const AppProvider = ({ children }) => {
       setPendingFetch(true);
       setIsLoading(true);
       setFetchError(null);
+      
+      // Determine if it's a playlist so the UI can show the correct loading text if it falls back
+      try {
+        const u = new URL(urlRef.current);
+        const hasList = u.searchParams.has('list');
+        const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
+        if (hasList && !hasVideo) {
+          setIsPlaylistMode(true);
+        }
+      } catch(e) {}
+      
       return;
     }
     
@@ -184,6 +182,37 @@ export const AppProvider = ({ children }) => {
       }
     }
   }, []);
+
+  // When yt-dlp finishes and there's a pending fetch queued, auto-trigger it
+  const pendingFetchRef = useRef(pendingFetch);
+  pendingFetchRef.current = pendingFetch;
+
+  useEffect(() => {
+    const done = !ytDlpStatus || ytDlpStatus === 'updated' || ytDlpStatus === 'up-to-date' || ytDlpStatus === 'error';
+    if (!done) return;
+    if (!pendingFetchRef.current) return;
+    // Brief delay so the "up to date" indicator renders for a moment
+    const timer = setTimeout(() => {
+      setPendingFetch(false);
+      try {
+        const u = new URL(urlRef.current);
+        const hasList = u.searchParams.has('list');
+        const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
+        
+        if (hasList && hasVideo) {
+          setIsLoading(false);
+          setHybridPromptUrl(urlRef.current);
+        } else if (hasList && !hasVideo) {
+          runPlaylistFetch();
+        } else {
+          runFetch();
+        }
+      } catch(e) {
+        runFetch();
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [ytDlpStatus, runFetch, runPlaylistFetch]);
 
   const goBackToHistory = () => {
     setUrl("");

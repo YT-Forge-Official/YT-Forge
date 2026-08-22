@@ -18,7 +18,7 @@ import {
 import { 
   ArrowLeft, Download, FolderOpen, ListVideo, 
   CheckCircle2, AlertCircle, Play, Pause, 
-  WifiOff, Info, X
+  WifiOff, Info, X, RefreshCw
 } from 'lucide-react';
 import {
   Select,
@@ -60,6 +60,30 @@ const PlaylistView = () => {
   const [globalQuality, setGlobalQuality] = useState('best');
   const [targetDir, setTargetDir] = useState(null);
   const [allowDuplicates, setAllowDuplicates] = useState(false);
+  
+  useEffect(() => {
+    console.log("PLAYLIST VIEW MOUNTED! IF YOU DON'T SEE THIS, THE NEW FILE ISN'T LOADING.");
+  }, []);
+
+  const [videoFormats, setVideoFormats] = useState({});
+  const [videoQualities, setVideoQualities] = useState({});
+  const [videoH264, setVideoH264] = useState({});
+
+  const handleGlobalQualityChange = (val) => {
+    setGlobalQuality(val);
+    setVideoQualities({});
+    setVideoH264({});
+  };
+  
+  const handleIndividualQualityChange = (id, val) => {
+    setVideoQualities(prev => ({ ...prev, [id]: val }));
+    if (globalQuality !== 'custom') setGlobalQuality('custom');
+  };
+  
+  const handleIndividualH264Change = (id, val) => {
+    setVideoH264(prev => ({ ...prev, [id]: val }));
+    if (globalQuality !== 'custom') setGlobalQuality('custom');
+  };
   
   // Download Queue State
   const [downloadQueue, setDownloadQueue] = useState([]);
@@ -105,7 +129,13 @@ const PlaylistView = () => {
       alert("Please choose a destination folder first.");
       return;
     }
-    const toDownload = playlistDetails.videos.filter(v => selectedVideos.has(v.id));
+    const toDownload = playlistDetails.videos
+      .filter(v => selectedVideos.has(v.id))
+      .map(v => ({
+        ...v,
+        customQuality: videoQualities[v.id] || (globalQuality === 'custom' ? 'best' : globalQuality),
+        customH264: videoH264[v.id] || false
+      }));
     if (toDownload.length === 0) return;
 
     setDownloadQueue(toDownload);
@@ -124,6 +154,41 @@ const PlaylistView = () => {
     setIsPaused(false);
     setPauseReason(null);
   };
+
+  // Background format fetcher
+  useEffect(() => {
+    if (!playlistDetails || !playlistDetails.videos) return;
+    let isCancelled = false;
+    const fetchQueue = async () => {
+      for (const video of playlistDetails.videos) {
+        if (isCancelled) break;
+        
+        // Mark as loading safely
+        setVideoFormats(prev => {
+          if (prev[video.id]) return prev;
+          return { ...prev, [video.id]: { isLoading: true, formats: [] } };
+        });
+        
+        try {
+          const res = await window.electronAPI.getSingleVideoInfoSilent(video.url);
+          if (isCancelled) break;
+          
+          setVideoFormats(prev => {
+            if (res.success && res.formats) {
+              return { ...prev, [video.id]: { isLoading: false, formats: res.formats } };
+            }
+            return { ...prev, [video.id]: { isLoading: false, formats: [] } };
+          });
+        } catch(e) {
+          if (!isCancelled) {
+            setVideoFormats(prev => ({ ...prev, [video.id]: { isLoading: false, formats: [] } }));
+          }
+        }
+      }
+    };
+    fetchQueue();
+    return () => { isCancelled = true; };
+  }, [playlistDetails]);
 
   // The Queue Manager Effect
   useEffect(() => {
@@ -164,8 +229,9 @@ const PlaylistView = () => {
       }
 
       const video = downloadQueue[currentDownloadIndex];
-      const type = globalQuality === 'audio' ? 'mp3' : 'mp4';
-      const qualityParam = globalQuality === 'audio' ? 'best' : globalQuality;
+      const effQuality = video.customQuality;
+      const type = effQuality === 'audio' ? 'mp3' : 'mp4';
+      const qualityParam = effQuality === 'audio' ? 'best' : effQuality;
       
       const options = {
         videoId: video.id,
@@ -174,8 +240,8 @@ const PlaylistView = () => {
         thumbnailUrl: video.thumbnail,
         type: type,
         quality: qualityParam,
-        qualityLabel: globalQuality === 'audio' ? 'MP3' : (globalQuality === 'best' ? 'Best' : `${globalQuality}p`),
-        convertToH264: false,
+        qualityLabel: effQuality === 'audio' ? 'MP3' : (effQuality === 'best' ? 'Best' : `${effQuality}p`),
+        convertToH264: video.customH264,
         targetDir: targetDir,
         allowDuplicates: allowDuplicates,
         skipHistory: true
@@ -259,11 +325,12 @@ const PlaylistView = () => {
           {/* Right side controls - only show when NOT downloading */}
           {!isBatchDownloading && (
             <div className="flex items-center gap-2 shrink-0">
-              <Select value={globalQuality} onValueChange={setGlobalQuality}>
+              <Select value={globalQuality} onValueChange={handleGlobalQualityChange}>
                 <SelectTrigger className="w-[140px] h-9 text-xs font-medium bg-secondary/30 border-border/50 hover:bg-secondary/50 transition-colors">
                   <SelectValue placeholder="Quality" />
                 </SelectTrigger>
                 <SelectContent>
+                  {globalQuality === 'custom' && <SelectItem value="custom" className="text-xs italic">Custom</SelectItem>}
                   <SelectItem value="best" className="text-xs">Best Available MP4</SelectItem>
                   <SelectItem value="2160" className="text-xs">Up to 4K (2160p)</SelectItem>
                   <SelectItem value="1440" className="text-xs">Up to 2K (1440p)</SelectItem>
@@ -491,6 +558,46 @@ const PlaylistView = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Settings Col */}
+                {!isBatchDownloading && (
+                  <div className="flex flex-col justify-center items-end shrink-0 gap-2 w-[140px] min-w-[140px] pl-2 border-l border-border/20">
+                    {videoFormats[video.id]?.isLoading ? (
+                      <div className="flex items-center justify-center w-full h-8 text-muted-foreground">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      </div>
+                    ) : (
+                      <>
+                        <Select 
+                          value={videoQualities[video.id] || (globalQuality === 'custom' ? 'best' : globalQuality)} 
+                          onValueChange={(val) => handleIndividualQualityChange(video.id, val)}
+                        >
+                          <SelectTrigger className="w-full h-7 text-[10px] bg-secondary/20 hover:bg-secondary/40 border-border/40 transition-colors">
+                            <SelectValue placeholder="Quality" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="best" className="text-[10px]">Best Available</SelectItem>
+                            {videoFormats[video.id]?.formats?.map(f => (
+                              <SelectItem key={f.itag} value={f.height?.toString() || f.itag} className="text-[10px]">{f.quality}</SelectItem>
+                            ))}
+                            <SelectItem value="audio" className="text-[10px]">Audio Only</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center gap-1.5 w-full justify-end">
+                          <label className="text-[9px] text-muted-foreground whitespace-nowrap cursor-pointer hover:text-foreground transition-colors" htmlFor={`h264-${video.id}`}>
+                            Convert to H.264
+                          </label>
+                          <Checkbox 
+                            id={`h264-${video.id}`}
+                            checked={videoH264[video.id] || false}
+                            onCheckedChange={(val) => handleIndividualH264Change(video.id, val)}
+                            className="h-3 w-3 rounded-[3px]"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -501,3 +608,4 @@ const PlaylistView = () => {
 };
 
 export default PlaylistView;
+// force HMR trigger

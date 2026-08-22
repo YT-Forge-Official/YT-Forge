@@ -471,7 +471,7 @@ function getAuthArgs() {
 // Helper: run yt-dlp --dump-json and return the parsed JSON.
 // extraArgs is appended after BASE_ARGS (e.g. player_client overrides).
 // ---------------------------------------------------------------------------
-async function runYtDlpJson(url, extraArgs = []) {
+async function runYtDlpJson(url, extraArgs = [], silent = false) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ytDlpBinaryPath, [
       url,
@@ -480,13 +480,13 @@ async function runYtDlpJson(url, extraArgs = []) {
       ...BASE_ARGS,
       ...extraArgs,
     ], { env: getYtDlpEnv(), windowsHide: true });
-    currentInfoFetchProcess = proc;
+    if (!silent) currentInfoFetchProcess = proc;
     let out = '';
     let err = '';
     proc.stdout.on('data', d => { out += d.toString(); });
     proc.stderr.on('data', d => { err += d.toString(); });
     proc.on('close', code => {
-      currentInfoFetchProcess = null;
+      if (!silent) currentInfoFetchProcess = null;
       if (code === 0) {
         resolve(JSON.parse(out));
       } else {
@@ -536,7 +536,7 @@ ipcMain.handle("get-video-info", async (event, url) => {
       try {
         info = await runYtDlpJson(url, [
           '--extractor-args', 'youtube:player_client=android,web',
-        ]);
+        ], false);
         console.log('Retry: total formats available:', info.formats.length);
       } catch (retryErr) {
         // Retry failed — carry on with whatever we got the first time
@@ -624,6 +624,55 @@ ipcMain.handle("get-video-info", async (event, url) => {
       return { success: false, isAgeRestricted: true, error: "The content is age-restricted. Please sign in via Google." };
     }
     console.error("Error fetching video info:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("get-single-video-info-silent", async (event, url) => {
+  try {
+    let info = await runYtDlpJson(url, [], true);
+    if (isBasicPlayerResponse(info.formats)) {
+      try {
+        info = await runYtDlpJson(url, ['--extractor-args', 'youtube:player_client=android,web'], true);
+      } catch (retryErr) {}
+    }
+    const heightMap = {};
+    info.formats.forEach(f => {
+      const rawH = f.height || 0;
+      const rawW = f.width || 0;
+      const displayH = (rawW > 0 && rawH > 0) ? Math.min(rawW, rawH) : rawH;
+      if (!displayH || displayH < 240) return;
+      if (!f.vcodec || f.vcodec === 'none') return;
+      const size = f.filesize || f.filesize_approx || 0;
+      const fps = f.fps || 30;
+      const isAdaptive = f.acodec === 'none';
+      const isH264 = f.vcodec.startsWith('avc') || f.vcodec === 'h264';
+      const isVP9 = f.vcodec.startsWith('vp09') || f.vcodec.startsWith('vp9');
+      const isAV1 = f.vcodec.startsWith('av01');
+      const key = `${displayH}_${fps > 30 ? fps : 30}`;
+      const codecScore = isH264 ? 2 : (isVP9 ? 1 : 0);
+      const score = (isAdaptive ? 4 : 0) + codecScore;
+      const cur = heightMap[key];
+      const curScore = cur ? (cur.isAdaptive ? 4 : 0) + (cur.isH264 ? 2 : (cur.isVP9 ? 1 : 0)) : -1;
+      if (score > curScore || (score === curScore && size > (cur?.size || 0))) {
+        heightMap[key] = { displayHeight: displayH, ytdlpHeight: rawH, fps, size, isAdaptive, isH264, isVP9, isAV1 };
+      }
+    });
+    const uniqueFormats = Object.values(heightMap).map(f => ({
+      itag: `${f.ytdlpHeight}`,
+      quality: `${f.displayHeight}p${f.fps > 30 ? f.fps : ''}${f.isH264 ? '' : (f.isVP9 ? ' (VP9)' : (f.isAV1 ? ' (AV1)' : ''))}`,
+      height: f.displayHeight,
+      size: f.size,
+      sizeFormatted: f.size > 0 ? formatBytes(f.size) : 'N/A',
+      isH264: f.isH264,
+    })).sort((a, b) => b.height - a.height);
+
+    return {
+      success: true,
+      videoId: info.id,
+      formats: uniqueFormats.length > 0 ? uniqueFormats : [{ itag: 'best', quality: 'Best', size: 0, sizeFormatted: 'N/A' }],
+    };
+  } catch (error) {
     return { success: false, error: error.message };
   }
 });
