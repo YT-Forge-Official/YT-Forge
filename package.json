@@ -16,7 +16,11 @@
     "dist:win": "npm run build && electron-builder --win --x64 --arm64",
     "dist:linux": "npm run build && electron-builder --linux --x64",
     "dist:linux:arm": "npm run build && electron-builder --linux --arm64",
-    "publish": "npm run build && electron-builder --publish always"
+    "publish": "npm run build && electron-builder --publish always",
+    "landing:dev": "npm --prefix landing run dev",
+    "landing:build": "npm --prefix landing run build",
+    "landing:start": "npm --prefix landing run start",
+    "landing:install": "npm --prefix landing install"
   },
   "keywords": [
     "youtube-downloader",
@@ -38,6 +42,8 @@
     "concurrently": "^9.2.1",
     "electron": "36.5.0",
     "electron-builder": "^26.8.1",
+    "playwright": "^1.62.1",
+    "playwright-core": "^1.62.1",
     "tailwindcss": "^4.2.1",
     "vite": "^5.4.19",
     "wait-on": "^9.0.4"
@@ -57,7 +63,7 @@
     "@vitejs/plugin-react": "^4.5.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "electron-store": "^10.1.0",
+    "electron-store": "^8.2.0",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "lucide-react": "^0.542.0",

@@ -1,0 +1,335 @@
+@import "tailwindcss";
+
+/* ============================================================
+   YT-FORGE — design tokens
+   Monochrome first. Ember accent used sparingly (forge heat).
+   ============================================================ */
+@theme {
+  /* surfaces */
+  --color-bg: #08090a;
+  --color-bg-elevated: #0e0f11;
+  --color-bg-card: #141517;
+  --color-bg-hover: #1c1d20;
+
+  /* hairlines */
+  --color-line-subtle: #ffffff0f;
+  --color-line: #ffffff1a;
+  --color-line-strong: #ffffff29;
+  --color-line-hover: #ffffff3d;
+
+  /* ink */
+  --color-ink: #f7f8f8;
+  --color-ink-deck: #d0d6e0;
+  --color-ink-2: #8a8f98;
+  --color-ink-3: #7c828b;
+  --color-ink-4: #5d6067;
+
+  /* accent — ember. used at <5% of surface area */
+  --color-ember: #ff6a2b;
+  --color-ember-dim: #b8471a;
+  --color-ok: #5e9e5b;
+  --color-warn: #f2c94c;
+  --color-err: #eb5757;
+
+  /* type scale — tight tracking is the whole personality */
+  --text-hero: clamp(2.5rem, 6.2vw, 5.25rem);
+  --text-hero--line-height: 0.98;
+  --text-hero--letter-spacing: -0.042em;
+
+  --text-section: clamp(1.875rem, 3.4vw, 2.75rem);
+  --text-section--line-height: 1.1;
+  --text-section--letter-spacing: -0.032em;
+
+  --text-sub: clamp(1.25rem, 2vw, 1.5rem);
+  --text-sub--line-height: 1.28;
+  --text-sub--letter-spacing: -0.024em;
+
+  --text-deck: 1.0625rem;
+  --text-deck--line-height: 1.6;
+  --text-deck--letter-spacing: -0.012em;
+
+  --text-card: 1.0625rem;
+  --text-card--line-height: 1.4;
+  --text-card--letter-spacing: -0.017em;
+
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.65;
+  --text-body--letter-spacing: -0.008em;
+
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.5;
+  --text-small--letter-spacing: -0.005em;
+
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1.2;
+  --text-meta--letter-spacing: 0.09em;
+
+  --text-data: 0.8125rem;
+  --text-data--line-height: 1.4;
+  --text-data--letter-spacing: -0.01em;
+
+  /* geometry */
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-panel: 14px;
+  --radius-pill: 999px;
+
+  /* rhythm */
+  --spacing-chapter: 10rem;
+  --spacing-section: 7rem;
+  --spacing-sub: 4rem;
+
+  /* motion */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root {
+  --dur-hover: 0.15s;
+  --dur-enter: 0.55s;
+  --content-max: 1200px;
+  --nav-h: 64px;
+  color-scheme: dark;
+}
+
+* { border-color: var(--color-line); }
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--nav-h) + 24px);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  overflow-x: hidden;
+}
+
+::selection { background: var(--color-ink); color: var(--color-bg); }
+
+/* thin scrollbar, matches the app */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #ffffff1f;
+  border-radius: 999px;
+  border: 3px solid var(--color-bg);
+}
+::-webkit-scrollbar-thumb:hover { background: #ffffff33; }
+
+@layer components {
+  /* ============================================================
+     COMPOSITES
+     ============================================================ */
+
+  /* The signature panel: top-lit glass with a 1px inner highlight */
+  .panel {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background:
+      radial-gradient(120% 140% at 50% 0%, rgba(255, 255, 255, 0.03), transparent 62%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.006));
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.014),
+      0 1px 2px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .panel-lg { border-radius: var(--radius-panel); }
+
+  .panel-interactive {
+    transition:
+      border-color var(--dur-hover) var(--ease-out),
+      background-color var(--dur-hover) var(--ease-out),
+      transform 0.4s var(--ease-enter);
+  }
+  .panel-interactive:hover {
+    border-color: var(--color-line-hover);
+    transform: translateY(-2px);
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.75rem;
+    padding: 0 1.5rem;
+    border-radius: var(--radius-control);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: -0.011em;
+    white-space: nowrap;
+    transition: all var(--dur-hover) var(--ease-out);
+  }
+
+  .btn-primary {
+    background: var(--color-ink);
+    color: var(--color-bg);
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.4),
+      inset 0 -1px 0 0 rgba(0, 0, 0, 0.12),
+      0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  }
+  .btn-primary:hover { background: #ffffff; transform: translateY(-1px); }
+  .btn-primary:active { transform: translateY(0); }
+
+  .btn-ghost {
+    border: 1px solid var(--color-line);
+    color: var(--color-ink);
+    background: transparent;
+  }
+  .btn-ghost:hover {
+    border-color: var(--color-line-hover);
+    background: var(--color-bg-hover);
+  }
+
+  /* Mono eyebrow label */
+  .eyebrow {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: var(--text-meta);
+    line-height: 1.2;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+
+  /* Two-tone heading — second half drops to grey. The Omium move. */
+  .dim { color: var(--color-ink-2); }
+
+  /* Backgrounds */
+  .halftone {
+    background-image: radial-gradient(circle at center, rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+    background-size: 14px 14px;
+    mask-image: radial-gradient(60% 70% at 50% 50%, #000 0%, transparent 78%);
+    -webkit-mask-image: radial-gradient(60% 70% at 50% 50%, #000 0%, transparent 78%);
+  }
+
+  .grid-lines {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+    background-size: 72px 72px;
+    mask-image: radial-gradient(70% 60% at 50% 0%, #000 0%, transparent 75%);
+    -webkit-mask-image: radial-gradient(70% 60% at 50% 0%, #000 0%, transparent 75%);
+  }
+
+  .ember-glow {
+    background: radial-gradient(closest-side, rgba(255, 106, 43, 0.2), rgba(255, 106, 43, 0.055) 45%, transparent 72%);
+  }
+
+  .fade-b { mask-image: linear-gradient(180deg, #000 62%, transparent 100%); -webkit-mask-image: linear-gradient(180deg, #000 62%, transparent 100%); }
+  .fade-x { mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent); }
+
+  /* Hairline divider that fades at both ends */
+  .rule {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.11) 50%, transparent);
+  }
+}
+
+/* ============================================================
+   SCROLL REVEAL
+   ============================================================ */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity var(--dur-enter) var(--ease-enter),
+    transform var(--dur-enter) var(--ease-enter);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+[data-reveal].is-in { opacity: 1; transform: none; }
+
+/* ============================================================
+   KEYFRAMES
+   ============================================================ */
+@keyframes marquee-left {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.78); }
+}
+
+@keyframes caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes scan-y {
+  0% { opacity: 0; transform: translateY(-100%); }
+  15%, 85% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(100%); }
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+
+@keyframes ring-out {
+  0% { opacity: 0.6; transform: scale(1); }
+  100% { opacity: 0; transform: scale(3.6); }
+}
+
+@keyframes dash-flow { to { stroke-dashoffset: -24; } }
+
+.anim-marquee { animation: marquee-left 42s linear infinite; }
+.anim-marquee-slow { animation: marquee-left 64s linear infinite; }
+.anim-pulse-dot { animation: pulse-dot 2s var(--ease-out) infinite; }
+.anim-caret { animation: caret 1.05s steps(1) infinite; }
+.anim-scan { animation: scan-y 3.4s var(--ease-out) infinite; }
+.anim-float { animation: float-slow 7s ease-in-out infinite; }
+.anim-spin-slow { animation: spin-slow 22s linear infinite; }
+.anim-ring { animation: ring-out 2.4s var(--ease-out) infinite; }
+.anim-dash { animation: dash-flow 1.6s linear infinite; }
+
+.group:hover .anim-marquee,
+.group:hover .anim-marquee-slow { animation-play-state: paused; }
+
+/* Text shimmer for the wordmark */
+.shimmer {
+  background: linear-gradient(100deg, #f7f8f8 30%, #ffffff 45%, #8a8f98 60%, #f7f8f8 75%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 7s linear infinite;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  [data-reveal] { opacity: 1; transform: none; }
+}
+
+@keyframes playhead {
+  0% { left: 0%; }
+  100% { left: 100%; }
+}
+
+/* ffmpeg wire sweep in the conversion strip */
+@keyframes wire {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}

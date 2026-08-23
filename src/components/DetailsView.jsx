@@ -25,9 +25,7 @@ import {
   ArrowLeft,
   Download,
   ImageDown,
-  FolderOpen,
   Loader2,
-  X,
   HardDrive,
   CheckCircle2,
   Info,
@@ -35,6 +33,9 @@ import {
   Play,
   WifiOff,
   Check,
+  Clock,
+  X,
+  AlertCircle,
 } from 'lucide-react';
 
 const formatTime = (totalSeconds) => {
@@ -48,34 +49,62 @@ const formatTime = (totalSeconds) => {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
+const stageLabels = {
+  starting: 'Preparing download...',
+  video: 'Downloading video...',
+  audio: 'Downloading audio...',
+  merging: 'Merging video & audio...',
+  processing: 'Processing audio...',
+  converting: 'Converting to H.264...',
+  done: 'Complete!',
+};
+
+const canPause = window.electronAPI.platform !== 'win32';
+
 const DetailsView = () => {
   const {
     videoDetails: details,
-    url,
     goBackToHistory,
-    isDownloading,
-    setIsDownloading,
-    refreshHistory
+    jobs,
+    activeJobs,
+    jobProgress,
+    jobResults,
+    boundJobId,
   } = useAppContext();
 
   const [selectedQuality, setSelectedQuality] = useState(
     String(details.formats[0]?.itag || "")
   );
   const [selectedType, setSelectedType] = useState("mp4");
-  const [progress, setProgress] = useState(0);
-  const [progressText, setProgressText] = useState("");
-  const [downloadStage, setDownloadStage] = useState('starting');
-  const [downloadedFilePath, setDownloadedFilePath] = useState(null);
-  const [isPaused, setIsPaused] = useState(false);
-  const [pauseReason, setPauseReason] = useState(null); // null | 'user' | 'network'
-
-  // New progress stats
-  const [speed, setSpeed] = useState(0);
-  const [eta, setEta] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-
-  // Conversion state
   const [convertToH264, setConvertToH264] = useState(false);
+  const [jobId, setJobId] = useState(boundJobId);
+
+  // Re-bind when the view is re-opened from the active downloads list
+  useEffect(() => {
+    setJobId(boundJobId);
+  }, [boundJobId]);
+
+  const job = useMemo(() => jobs.find(j => j.id === jobId) || null, [jobs, jobId]);
+  const result = jobId ? jobResults[jobId] : null;
+  const progress = (jobId && jobProgress[jobId]) || {};
+
+  const isQueued = job?.status === 'queued';
+  const isDownloadingJob = job?.status === 'downloading';
+  const isBusy = isQueued || isDownloadingJob;
+
+  // If this job is bound (re-opened view), lock selectors to the job's settings
+  useEffect(() => {
+    if (job && job.kind === 'video') {
+      if (job.quality) setSelectedQuality(String(job.quality));
+      if (job.type) setSelectedType(job.type);
+      setConvertToH264(!!job.convertToH264);
+    }
+  }, [job?.id]);
+
+  const queuePosition = useMemo(() => {
+    if (!isQueued) return 0;
+    return activeJobs.findIndex(j => j.id === jobId) + 1;
+  }, [isQueued, activeJobs, jobId]);
 
   const isVP9 = useMemo(() => {
     if (selectedType === 'mp3') return false;
@@ -83,118 +112,67 @@ const DetailsView = () => {
     return format ? !format.isH264 : false;
   }, [selectedQuality, selectedType, details.formats]);
 
+  const selectedFormat = useMemo(
+    () => details.formats.find(f => String(f.itag) === selectedQuality),
+    [details.formats, selectedQuality]
+  );
+
   const estimatedSize = useMemo(() => {
     if (selectedType === 'mp3') {
       return details.audioSizeFormatted || 'N/A';
     }
-    const format = details.formats.find(f => String(f.itag) === selectedQuality);
-    if (!format || !format.sizeFormatted) return "N/A";
-
-    if (convertToH264 && isVP9) {
-      if (format.size > 0) {
-        return `~${formatBytes(format.size * 1.9)}`;
-      }
+    if (!selectedFormat || !selectedFormat.sizeFormatted) return "N/A";
+    if (convertToH264 && isVP9 && selectedFormat.size > 0) {
+      return `~${formatBytes(selectedFormat.size * 1.9)}`;
     }
-    return format.sizeFormatted;
-  }, [selectedQuality, selectedType, details.formats, details.audioSizeFormatted, convertToH264, isVP9]);
+    return selectedFormat.sizeFormatted;
+  }, [selectedType, selectedFormat, details.audioSizeFormatted, convertToH264, isVP9]);
 
-  const stageLabels = {
-    starting: 'Preparing download...',
-    video: 'Downloading video...',
-    audio: 'Downloading audio...',
-    merging: 'Merging video & audio...',
-    processing: 'Processing audio...',
-    converting: 'Converting to H.264...',
-    done: 'Complete!',
-  };
-
+  // Clear the finished-state binding if the user changes format or quality
   useEffect(() => {
-    const listener = (data) => {
-      // Handle pause/resume status events
-      if (data.paused !== undefined) {
-        setIsPaused(data.paused);
-        setPauseReason(data.reason || null);
-        if (data.stage) setDownloadStage(data.stage);
-        return;
-      }
-
-      const { percent = 0, downloadedBytes = 0, totalBytes = 0, stage = 'starting', speed = 0, eta = 0, elapsed = 0 } = data;
-      setProgress(percent);
-      setDownloadStage(stage);
-      setSpeed(speed);
-      setEta(eta);
-      setElapsed(elapsed);
-
-      if (stage === 'merging' || stage === 'processing') {
-        setProgressText(stageLabels[stage]);
-      } else if (totalBytes > 0) {
-        setProgressText(`${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`);
-      } else if (percent > 0) {
-        setProgressText(`${percent.toFixed(1)}%`);
-      } else {
-        setProgressText('Starting...');
-      }
-    };
-    window.electronAPI.onDownloadProgress(listener);
-  }, []);
-
-  // Clear downloaded state if the user changes the format or quality
-  useEffect(() => {
-    setDownloadedFilePath(null);
+    if (result) setJobId(null);
   }, [selectedQuality, selectedType]);
 
-  const handleDownload = async () => {
-    setIsDownloading(true);
-    setProgress(0);
-    setProgressText("Preparing download...");
-    setDownloadedFilePath(null);
+  const progressText = useMemo(() => {
+    const { percent = 0, downloadedBytes = 0, totalBytes = 0, stage = 'starting' } = progress;
+    if (stage === 'merging' || stage === 'processing') return stageLabels[stage];
+    if (totalBytes > 0) return `${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
+    if (percent > 0) return `${percent.toFixed(1)}%`;
+    return 'Starting...';
+  }, [progress]);
 
-    const qualityLabel = details.formats.find(
-      (f) => String(f.itag) === selectedQuality
-    )?.quality;
+  const handleDownload = async () => {
+    const qualityLabel = selectedFormat?.quality;
+    // Canonical URL — the search bar may have changed since this video was fetched
+    const canonicalUrl = details.videoId
+      ? `https://www.youtube.com/watch?v=${details.videoId}`
+      : '';
 
     const options = {
-      ...details,
-      url,
+      videoId: details.videoId,
+      url: canonicalUrl,
+      title: details.title,
+      thumbnailUrl: details.thumbnailUrl,
       quality: selectedQuality,
       qualityLabel,
       type: selectedType,
       convertToH264: convertToH264 && isVP9,
+      sizeBytes: selectedType === 'mp3' ? (details.audioSize || 0) : (selectedFormat?.size || 0),
+      // Snapshot of everything needed to restore this view from the queue
+      meta: { ...details },
     };
 
-    const result = await window.electronAPI.downloadVideo(options);
-    if (result.success) {
-      setDownloadedFilePath(result.path);
-      await refreshHistory();
-    } else {
-      if (result.error !== "Download was canceled.") {
-        console.error(`Error: ${result.error}`);
-      }
+    const res = await window.electronAPI.queueVideo(options);
+    if (res.success) {
+      setJobId(res.jobId);
+    } else if (!res.canceled) {
+      console.error(`Error: ${res.error}`);
     }
-    setIsDownloading(false);
   };
 
   const handleCancelDownload = (keepOriginal = false) => {
-    // If it's a click event vs our explicit boolean
-    const shouldKeep = typeof keepOriginal === 'boolean' ? keepOriginal : false;
-    window.electronAPI.cancelDownload({ keepOriginal: shouldKeep });
-
-    if (!shouldKeep) {
-      setIsDownloading(false);
-      setIsPaused(false);
-      setPauseReason(null);
-      setProgress(0);
-    } else {
-      setProgressText('Stopping conversion...');
-    }
-  };
-
-  const handlePauseDownload = () => {
-    window.electronAPI.pauseDownload();
-  };
-
-  const handleResumeDownload = () => {
-    window.electronAPI.resumeDownload();
+    if (!jobId) return;
+    window.electronAPI.cancelJob({ jobId, keepOriginal: !!keepOriginal });
   };
 
   const handleThumbnailDownload = async () => {
@@ -207,6 +185,14 @@ const DetailsView = () => {
     }
   };
 
+  const isPaused = !!progress.paused;
+  const pauseReason = progress.pauseReason || null;
+  const downloadStage = progress.stage || 'starting';
+  const percent = progress.percent || 0;
+  const speed = progress.speed || 0;
+  const eta = progress.eta || 0;
+  const elapsed = progress.elapsed || 0;
+
   return (
     <div className="flex flex-col h-full">
       {/* Back Button */}
@@ -214,7 +200,6 @@ const DetailsView = () => {
         variant="ghost"
         size="sm"
         onClick={goBackToHistory}
-        disabled={isDownloading}
         className="self-start -ml-2 mb-4 gap-1.5 text-muted-foreground hover:text-foreground h-7 text-xs"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
@@ -244,7 +229,6 @@ const DetailsView = () => {
             <button
               className="absolute bottom-2 right-2 flex items-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-2 py-1 text-[10px] text-white/80 hover:text-white hover:bg-black/80 transition-all opacity-0 group-hover:opacity-100 cursor-pointer border-none"
               onClick={handleThumbnailDownload}
-              disabled={isDownloading}
             >
               <ImageDown className="h-3 w-3" />
               Save
@@ -258,7 +242,7 @@ const DetailsView = () => {
               <Select
                 value={selectedType}
                 onValueChange={setSelectedType}
-                disabled={isDownloading}
+                disabled={isBusy}
               >
                 <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
                   <SelectValue />
@@ -272,14 +256,14 @@ const DetailsView = () => {
               <Select
                 value={selectedQuality}
                 onValueChange={setSelectedQuality}
-                disabled={isDownloading || selectedType === "mp3"}
+                disabled={isBusy || selectedType === "mp3" || details.formats.length === 0}
               >
                 <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {details.formats.map((f) => (
-                    <SelectItem key={f.itag} value={String(f.itag)}>
+                    <SelectItem key={`${f.itag}-${f.fps || ''}`} value={String(f.itag)}>
                       {f.quality}
                     </SelectItem>
                   ))}
@@ -288,7 +272,7 @@ const DetailsView = () => {
             </div>
 
             {/* VP9 compatibility note & Conversion Toggle */}
-            {isVP9 && !isDownloading && (
+            {isVP9 && !isBusy && (
               <div className="flex flex-col gap-3 p-3 rounded-lg border border-border/40 bg-secondary/20">
                 <div className="flex items-start gap-2.5">
                   <Info className="h-4 w-4 text-amber-500/70 mt-0.5 shrink-0" />
@@ -317,24 +301,50 @@ const DetailsView = () => {
               </div>
             )}
 
-            {/* Download & Size — equal grid, matching format/quality */}
-            {isDownloading ? (
+            {/* Primary action area */}
+            {isQueued ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3 rounded-lg border border-border/40 bg-secondary/20 px-3.5 py-2.5">
+                  <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="text-[13px] font-medium text-foreground leading-tight">In queue</span>
+                    <span className="text-[11px] text-muted-foreground leading-snug">
+                      {queuePosition > 1 ? `Position ${queuePosition} — starts automatically` : 'Starting soon…'}
+                    </span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2.5 text-xs text-destructive-foreground/80 hover:text-destructive-foreground hover:bg-destructive/15 shrink-0"
+                    onClick={() => handleCancelDownload(false)}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ) : isDownloadingJob ? (
               <div className="flex flex-col gap-2">
                 <div className="grid grid-cols-[1fr,auto] gap-2.5">
                   {isPaused && pauseReason !== 'network' ? (
-                    <Button className="gap-2 h-9" onClick={handleResumeDownload}>
+                    <Button className="gap-2 h-9" onClick={() => window.electronAPI.resumeDownload()}>
                       <Play className="h-4 w-4" />
                       Resume
                     </Button>
-                  ) : !isPaused ? (
+                  ) : !isPaused && canPause ? (
                     <Button
                       variant="secondary"
                       className="gap-2 h-9"
-                      onClick={handlePauseDownload}
+                      onClick={() => window.electronAPI.pauseDownload()}
                       disabled={downloadStage === 'merging' || downloadStage === 'processing'}
                     >
                       <Pause className="h-4 w-4" />
                       Pause
+                    </Button>
+                  ) : !isPaused ? (
+                    <Button disabled variant="secondary" className="gap-2 h-9">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Downloading
                     </Button>
                   ) : (
                     <Button disabled className="gap-2 h-9">
@@ -368,7 +378,6 @@ const DetailsView = () => {
                             <AlertDialogCancel>Keep converting</AlertDialogCancel>
                             <div className="flex items-center gap-2">
                               <AlertDialogAction
-                                variant="outline"
                                 className="bg-transparent border border-border text-foreground hover:bg-secondary"
                                 onClick={() => handleCancelDownload(true)}
                               >
@@ -407,34 +416,44 @@ const DetailsView = () => {
                   </div>
                 )}
               </div>
-            ) : downloadedFilePath ? (
+            ) : result?.success ? (
               <Button
                 variant="outline"
                 className="w-full gap-2 h-9 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300"
-                onClick={() => window.electronAPI.openFileLocation(downloadedFilePath)}
+                onClick={() => window.electronAPI.openFileLocation(result.path)}
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Show in Folder
               </Button>
             ) : (
-              <div className="grid grid-cols-2 gap-2.5">
-                <Button className="gap-2 h-9" onClick={handleDownload}>
-                  <Download className="h-4 w-4" />
-                  Download
-                </Button>
-                <div className="flex items-center justify-center rounded-md border border-border/50 bg-secondary/40 text-xs text-muted-foreground font-medium h-9 gap-1.5">
-                  <HardDrive className="h-3.5 w-3.5 opacity-60" />
-                  {estimatedSize}
+              <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Button className="gap-2 h-9" onClick={handleDownload}>
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
+                  <div className="flex items-center justify-center rounded-md border border-border/50 bg-secondary/40 text-xs text-muted-foreground font-medium h-9 gap-1.5">
+                    <HardDrive className="h-3.5 w-3.5 opacity-60" />
+                    {estimatedSize}
+                  </div>
                 </div>
+                {result && !result.success && !result.cancelled && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-destructive/5 border border-destructive/15">
+                    <AlertCircle className="h-3 w-3 text-destructive/80 shrink-0" />
+                    <p className="text-[11px] leading-snug text-destructive/80">
+                      Download failed — please try again
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
           {/* Progress Area (pushed to bottom) */}
-          {isDownloading && (
+          {isDownloadingJob && (
             <div className="mt-auto pt-4 flex flex-col gap-2">
               {/* Stats Row */}
-              {(downloadStage === 'video' || downloadStage === 'audio' || downloadStage === 'converting') && progress > 0 && (
+              {(downloadStage === 'video' || downloadStage === 'audio' || downloadStage === 'converting') && percent > 0 && (
                 <div className="flex bg-secondary/30 border border-border/30 rounded-lg divide-x divide-border/30 overflow-hidden shadow-sm animate-in fade-in duration-200">
                   <div className="flex-1 px-2 py-1.5 flex flex-col items-center justify-center">
                     <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground mb-0.5">Speed</span>
@@ -471,8 +490,8 @@ const DetailsView = () => {
                   </span>
                 </div>
                 <Progress
-                  value={progress}
-                  indeterminate={progress <= 0 && !isPaused}
+                  value={percent}
+                  indeterminate={percent <= 0 && !isPaused}
                   paused={isPaused}
                 />
               </div>

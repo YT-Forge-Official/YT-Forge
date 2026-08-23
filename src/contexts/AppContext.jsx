@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 const AppContext = createContext();
 
@@ -15,52 +15,103 @@ export const AppProvider = ({ children }) => {
   const [videoDetails, setVideoDetails] = useState(null);
   const [history, setHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [fetchError, setFetchError] = useState(null);
   const [ytDlpStatus, setYtDlpStatus] = useState(null);
-  // True when user clicked "Get Video" while yt-dlp was still running
+  // True when user clicked "Get Video" while yt-dlp was still updating
   const [pendingFetch, setPendingFetch] = useState(false);
-  
+
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authExpired, setAuthExpired] = useState(false);
   const [isAgeRestricted, setIsAgeRestricted] = useState(false);
 
   const [playlistDetails, setPlaylistDetails] = useState(null);
   const [isPlaylistMode, setIsPlaylistMode] = useState(false);
   const [hybridPromptUrl, setHybridPromptUrl] = useState(null);
 
+  // ── Download queue state (mirrors the main-process queue) ────────────────
+  const [jobs, setJobs] = useState([]);
+  const [jobProgress, setJobProgress] = useState({}); // jobId -> latest progress payload
+  const [jobResults, setJobResults] = useState({});   // jobId -> { success, path, error, cancelled, ... }
+  // The job the current Details/Playlist view is bound to (so re-opening an
+  // active download shows the exact same view it was started from)
+  const [boundJobId, setBoundJobId] = useState(null);
+
   const fetchIdRef = useRef(0);
   const urlRef = useRef(url);
   urlRef.current = url;
+  const wasAuthenticatedRef = useRef(false);
 
-  // Listen for yt-dlp update status. Now that main.js waits for did-finish-load
-  // before calling updateYtDlp(), this listener is always registered in time.
   useEffect(() => {
     window.electronAPI.onYtDlpUpdateStatus(({ status }) => {
       setYtDlpStatus(status);
     });
   }, []);
 
-  // Fetch history on mount
+  // Fetch history on mount + refresh whenever main process writes new entries
   useEffect(() => {
     window.electronAPI.getHistory().then(setHistory);
+    window.electronAPI.onHistoryUpdated(() => {
+      window.electronAPI.getHistory().then(setHistory);
+    });
+  }, []);
+
+  // Queue subscriptions
+  useEffect(() => {
+    window.electronAPI.getQueue().then(setJobs);
+    window.electronAPI.onQueueUpdated(setJobs);
+    window.electronAPI.onDownloadProgress((p) => {
+      if (!p || !p.jobId) return;
+      setJobProgress(prev => {
+        const old = prev[p.jobId] || {};
+        // Pause/resume status events carry no byte counts — merge them
+        if (p.paused !== undefined && p.percent === undefined) {
+          return { ...prev, [p.jobId]: { ...old, paused: p.paused, pauseReason: p.reason || null, stage: p.stage || old.stage } };
+        }
+        return { ...prev, [p.jobId]: { ...old, ...p, paused: false, pauseReason: null } };
+      });
+    });
+    window.electronAPI.onJobFinished((r) => {
+      if (!r || !r.jobId) return;
+      setJobResults(prev => ({ ...prev, [r.jobId]: r }));
+    });
   }, []);
 
   // Check initial youtube auth state
   useEffect(() => {
-    window.electronAPI.checkYoutubeAuth().then(setIsAuthenticated);
+    window.electronAPI.checkYoutubeAuth().then((ok) => {
+      setIsAuthenticated(ok);
+      wasAuthenticatedRef.current = ok;
+    });
+  }, []);
+
+  const refreshAuth = useCallback(async () => {
+    const ok = await window.electronAPI.checkYoutubeAuth();
+    if (!ok && wasAuthenticatedRef.current) {
+      // Session that used to work no longer does — surface it so the user can re-login
+      setAuthExpired(true);
+    }
+    if (ok) setAuthExpired(false);
+    wasAuthenticatedRef.current = ok;
+    setIsAuthenticated(ok);
+    return ok;
   }, []);
 
   const loginYoutube = async () => {
     const success = await window.electronAPI.loginYoutube();
-    if (success) setIsAuthenticated(true);
+    if (success) {
+      setIsAuthenticated(true);
+      setAuthExpired(false);
+      wasAuthenticatedRef.current = true;
+    }
     return success;
   };
 
   const logoutYoutube = async () => {
     await window.electronAPI.logoutYoutube();
     setIsAuthenticated(false);
+    setAuthExpired(false);
+    wasAuthenticatedRef.current = false;
   };
-
 
   // The actual fetch logic — uses urlRef so it's always fresh
   const runFetch = useCallback(async () => {
@@ -70,6 +121,7 @@ export const AppProvider = ({ children }) => {
     setFetchError(null);
     setIsAgeRestricted(false);
     setIsPlaylistMode(false);
+    setBoundJobId(null);
     const currentFetchId = ++fetchIdRef.current;
     try {
       const result = await window.electronAPI.getVideoInfo(currentUrl);
@@ -95,20 +147,17 @@ export const AppProvider = ({ children }) => {
         setIsLoading(false);
       }
     }
-  }, []); // stable — uses refs internally
-
+  }, []);
 
   const isYtDlpBusy = ytDlpStatus === 'checking' || ytDlpStatus === 'downloading';
 
   const handleFetchDetails = () => {
-    if (!urlRef.current || isDownloading) return;
+    if (!urlRef.current) return;
     if (isYtDlpBusy) {
-      // Queue: show loader with yt-dlp stage, auto-proceed when done
       setPendingFetch(true);
       setIsLoading(true);
       setFetchError(null);
-      
-      // Determine if it's a playlist so the UI can show the correct loading text if it falls back
+
       try {
         const u = new URL(urlRef.current);
         const hasList = u.searchParams.has('list');
@@ -116,17 +165,16 @@ export const AppProvider = ({ children }) => {
         if (hasList && !hasVideo) {
           setIsPlaylistMode(true);
         }
-      } catch(e) {}
-      
+      } catch (e) {}
+
       return;
     }
-    
-    // Analyze URL to determine video vs playlist
+
     try {
       const u = new URL(urlRef.current);
       const hasList = u.searchParams.has('list');
       const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
-      
+
       if (hasList && hasVideo) {
         setHybridPromptUrl(urlRef.current);
         return;
@@ -134,8 +182,8 @@ export const AppProvider = ({ children }) => {
         runPlaylistFetch();
         return;
       }
-    } catch(e) {}
-    
+    } catch (e) {}
+
     runFetch();
   };
 
@@ -155,13 +203,14 @@ export const AppProvider = ({ children }) => {
     setFetchError(null);
     setIsAgeRestricted(false);
     setIsPlaylistMode(true);
+    setBoundJobId(null);
     const currentFetchId = ++fetchIdRef.current;
-    
+
     try {
       const result = await window.electronAPI.getPlaylistInfo(currentUrl);
       if (currentFetchId !== fetchIdRef.current) return;
       if (result.success) {
-        setPlaylistDetails(result);
+        setPlaylistDetails({ ...result, sourceUrl: currentUrl });
       } else {
         console.error(`Error: ${result.error}`);
         setPlaylistDetails(null);
@@ -191,14 +240,13 @@ export const AppProvider = ({ children }) => {
     const done = !ytDlpStatus || ytDlpStatus === 'updated' || ytDlpStatus === 'up-to-date' || ytDlpStatus === 'error';
     if (!done) return;
     if (!pendingFetchRef.current) return;
-    // Brief delay so the "up to date" indicator renders for a moment
     const timer = setTimeout(() => {
       setPendingFetch(false);
       try {
         const u = new URL(urlRef.current);
         const hasList = u.searchParams.has('list');
         const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
-        
+
         if (hasList && hasVideo) {
           setIsLoading(false);
           setHybridPromptUrl(urlRef.current);
@@ -207,7 +255,7 @@ export const AppProvider = ({ children }) => {
         } else {
           runFetch();
         }
-      } catch(e) {
+      } catch (e) {
         runFetch();
       }
     }, 500);
@@ -224,6 +272,8 @@ export const AppProvider = ({ children }) => {
     setIsAgeRestricted(false);
     setPendingFetch(false);
     setIsLoading(false);
+    setBoundJobId(null);
+    window.electronAPI.cancelPlaylistPrefetch();
   };
 
   const cancelFetchDetails = () => {
@@ -241,6 +291,7 @@ export const AppProvider = ({ children }) => {
       setHybridPromptUrl(null);
       setFetchError(null);
       setIsAgeRestricted(false);
+      setBoundJobId(null);
     }
   };
 
@@ -248,6 +299,47 @@ export const AppProvider = ({ children }) => {
     const data = await window.electronAPI.getHistory();
     setHistory(data);
   };
+
+  /**
+   * Open the view for an in-flight job — restores the exact Details/Playlist
+   * view the download was started from.
+   */
+  const viewJob = (job) => {
+    setFetchError(null);
+    setHybridPromptUrl(null);
+    setIsAgeRestricted(false);
+    setIsLoading(false);
+    if (job.kind === 'video') {
+      setPlaylistDetails(null);
+      setIsPlaylistMode(false);
+      setVideoDetails(job.meta || {
+        videoId: job.videoId,
+        title: job.title,
+        thumbnailUrl: job.thumbnailUrl,
+        description: '',
+        formats: [],
+      });
+    } else {
+      setVideoDetails(null);
+      setPlaylistDetails({
+        title: job.title,
+        uploader: job.uploader,
+        videos: (job.items || []).map(it => ({
+          id: it.id,
+          url: it.url,
+          title: it.title,
+          duration: it.duration,
+          thumbnail: it.thumbnail,
+          uploader: job.uploader,
+        })),
+      });
+      setIsPlaylistMode(true);
+    }
+    setBoundJobId(job.id);
+  };
+
+  const activeJobs = useMemo(() => jobs.filter(j => j.status === 'queued' || j.status === 'downloading'), [jobs]);
+  const isDownloading = activeJobs.some(j => j.status === 'downloading');
 
   const value = {
     url,
@@ -257,19 +349,28 @@ export const AppProvider = ({ children }) => {
     hybridPromptUrl,
     history,
     isLoading,
-    isDownloading,
     fetchError,
     ytDlpStatus,
     pendingFetch,
     isYtDlpBusy,
     isAuthenticated,
+    authExpired,
     isAgeRestricted,
+    // queue
+    jobs,
+    activeJobs,
+    isDownloading,
+    jobProgress,
+    jobResults,
+    boundJobId,
+    setBoundJobId,
+    viewJob,
+    // actions
     setUrl,
     setVideoDetails,
     setPlaylistDetails,
     setHistory,
     setIsLoading,
-    setIsDownloading,
     handleUrlChange,
     handleFetchDetails,
     handleHybridChoice,
@@ -278,6 +379,7 @@ export const AppProvider = ({ children }) => {
     refreshHistory,
     loginYoutube,
     logoutYoutube,
+    refreshAuth,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

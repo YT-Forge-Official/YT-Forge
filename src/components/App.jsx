@@ -7,7 +7,7 @@ import HistoryView from './HistoryView';
 import DetailsView from './DetailsView';
 import PlaylistView from './PlaylistView';
 import LoadingComponent from './LoadingComponent';
-import { AlertCircle, ArrowLeft, Download, CheckCircle2, RefreshCw, X, Youtube, Loader2, ListVideo, Film } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Youtube, Loader2, ListVideo, Film } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const GoogleIcon = (props) => (
@@ -64,8 +64,8 @@ const AppContent = () => {
             </div>
             
             <div className="grid grid-cols-2 gap-4 w-full mt-2">
-              <button 
-                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md"
+              <button
+                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md cursor-pointer active:scale-[0.98]"
                 onClick={() => handleHybridChoice('video')}
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -76,8 +76,8 @@ const AppContent = () => {
                 </div>
               </button>
               
-              <button 
-                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md"
+              <button
+                className="group relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-background hover:bg-secondary/40 hover:border-primary/40 transition-all duration-300 text-left overflow-hidden shadow-sm hover:shadow-md cursor-pointer active:scale-[0.98]"
                 onClick={() => handleHybridChoice('playlist')}
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />

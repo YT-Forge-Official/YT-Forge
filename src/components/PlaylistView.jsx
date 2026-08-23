@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
+import { formatBytes } from '../utils/formatBytes';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
-import { 
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -15,10 +16,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { 
-  ArrowLeft, Download, FolderOpen, ListVideo, 
-  CheckCircle2, AlertCircle, Play, Pause, 
-  WifiOff, Info, X, RefreshCw
+import {
+  ArrowLeft, Download, FolderOpen, CheckCircle2, AlertCircle,
+  Play, Pause, X, Clock, HardDrive, SkipForward, ListVideo, Info,
 } from 'lucide-react';
 import {
   Select,
@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const formatTime = (totalSeconds) => {
   if (!totalSeconds || isNaN(totalSeconds) || totalSeconds < 0) return '00:00';
@@ -38,67 +38,158 @@ const formatTime = (totalSeconds) => {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
-const formatBytes = (bytes) => {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024, dm = 2, sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+const formatDuration = (seconds) => {
+  if (!seconds) return 'Live';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
+const thumbFallback = (e) => {
+  if (e.target.src.includes('maxresdefault')) {
+    e.target.src = e.target.src.replace(/maxresdefault\.(jpg|webp)/, 'hqdefault.jpg');
+  } else if (e.target.src.includes('sd2.jpg') || e.target.src.includes('sddefault.jpg')) {
+    e.target.src = e.target.src.replace(/sd2\.jpg|sddefault\.jpg/, 'hqdefault.jpg');
+  } else {
+    e.target.style.opacity = 0;
+  }
+};
+
+const canPause = window.electronAPI.platform !== 'win32';
+
+/** Deduplicate formats by itag (yt-dlp height) — the download format arg only
+ *  cares about height, so keep the best (highest-fps) entry per height. */
+const dedupeFormats = (formats) => {
+  const seen = new Set();
+  const out = [];
+  for (const f of formats || []) {
+    if (f.itag === 'best' || seen.has(f.itag)) continue;
+    seen.add(f.itag);
+    out.push(f);
+  }
+  return out;
+};
+
+// Estimated size multiplier for the offline VP9/AV1 → H.264 conversion
+const H264_SIZE_FACTOR = 1.9;
+
 const PlaylistView = () => {
-  const { 
-    playlistDetails, 
-    goBackToHistory, 
-    isDownloading,
-    setIsDownloading,
-    refreshHistory
+  const {
+    playlistDetails,
+    goBackToHistory,
+    jobs,
+    activeJobs,
+    jobProgress,
+    jobResults,
+    boundJobId,
+    setBoundJobId,
   } = useAppContext();
 
   if (!playlistDetails) return null;
 
+  const boundJob = useMemo(
+    () => (boundJobId ? jobs.find(j => j.id === boundJobId && j.kind === 'playlist') : null),
+    [jobs, boundJobId]
+  );
+  const boundResult = boundJobId ? jobResults[boundJobId] : null;
+  const inProgressMode = !!boundJob || !!boundResult;
+
+  // ── Selection state ────────────────────────────────────────────────────────
   const [selectedVideos, setSelectedVideos] = useState(new Set(playlistDetails.videos.map(v => v.id)));
   const [globalQuality, setGlobalQuality] = useState('best');
-  const [targetDir, setTargetDir] = useState(null);
+  const [globalH264, setGlobalH264] = useState(false);
   const [allowDuplicates, setAllowDuplicates] = useState(false);
-  
-  useEffect(() => {
-    console.log("PLAYLIST VIEW MOUNTED! IF YOU DON'T SEE THIS, THE NEW FILE ISN'T LOADING.");
-  }, []);
+  const [videoFormats, setVideoFormats] = useState({});     // id -> { isLoading, formats, audioSize }
+  const [videoQualities, setVideoQualities] = useState({}); // id -> explicit user choice
+  const [videoH264, setVideoH264] = useState({});           // id -> bool (individual override)
 
-  const [videoFormats, setVideoFormats] = useState({});
-  const [videoQualities, setVideoQualities] = useState({});
-  const [videoH264, setVideoH264] = useState({});
+  // ── Parallel background format prefetch ───────────────────────────────────
+  useEffect(() => {
+    if (inProgressMode) return;
+    if (!playlistDetails?.videos?.length) return;
+
+    setVideoFormats(prev => {
+      const next = { ...prev };
+      for (const v of playlistDetails.videos) {
+        if (!next[v.id]) next[v.id] = { isLoading: true, formats: [], audioSize: 0 };
+      }
+      return next;
+    });
+
+    window.electronAPI.onPlaylistFormatResult((res) => {
+      setVideoFormats(prev => ({
+        ...prev,
+        [res.id]: {
+          isLoading: false,
+          formats: res.success ? dedupeFormats(res.formats) : [],
+          audioSize: res.audioSize || 0,
+        },
+      }));
+    });
+
+    window.electronAPI.prefetchPlaylistFormats(
+      playlistDetails.videos.map(v => ({ id: v.id, url: v.url }))
+    );
+
+    return () => {
+      window.electronAPI.cancelPlaylistPrefetch();
+    };
+  }, [playlistDetails, inProgressMode]);
+
+  // ── Quality & size resolution helpers ─────────────────────────────────────
+  const resolveQuality = useCallback((videoId) => {
+    const explicit = videoQualities[videoId];
+    if (explicit) return explicit;
+    if (globalQuality === 'audio') return 'audio';
+    const fmts = videoFormats[videoId]?.formats;
+    if (globalQuality === 'best' || globalQuality === 'custom' || !fmts?.length) return 'best';
+    const cap = parseInt(globalQuality);
+    const match = fmts.find(f => f.height <= cap); // fmts sorted best-first
+    return match ? String(match.itag) : 'best';
+  }, [videoQualities, globalQuality, videoFormats]);
+
+  const resolveFormat = useCallback((videoId) => {
+    const q = resolveQuality(videoId);
+    if (q === 'audio') return null;
+    const fmts = videoFormats[videoId]?.formats;
+    if (!fmts?.length) return null;
+    if (q === 'best') return fmts[0];
+    return fmts.find(f => String(f.itag) === q) || null;
+  }, [resolveQuality, videoFormats]);
+
+  // Whether H.264 conversion will actually run for this video
+  const effectiveConvert = useCallback((videoId) => {
+    const q = resolveQuality(videoId);
+    if (q === 'audio') return false;
+    const fmt = resolveFormat(videoId);
+    if (!fmt || fmt.isH264) return false;
+    return globalH264 || !!videoH264[videoId];
+  }, [resolveQuality, resolveFormat, globalH264, videoH264]);
+
+  // Estimated on-disk size, accounting for the conversion multiplier
+  const itemSizeBytes = useCallback((videoId) => {
+    const entry = videoFormats[videoId];
+    const q = resolveQuality(videoId);
+    if (q === 'audio') return entry?.audioSize || 0;
+    const fmt = resolveFormat(videoId);
+    if (!fmt || !(fmt.size > 0)) return 0;
+    const base = fmt.size + (entry?.audioSize || 0);
+    return effectiveConvert(videoId) ? Math.round(base * H264_SIZE_FACTOR) : base;
+  }, [videoFormats, resolveQuality, resolveFormat, effectiveConvert]);
 
   const handleGlobalQualityChange = (val) => {
+    if (val === 'custom') return; // display-only
     setGlobalQuality(val);
     setVideoQualities({});
     setVideoH264({});
   };
-  
+
   const handleIndividualQualityChange = (id, val) => {
     setVideoQualities(prev => ({ ...prev, [id]: val }));
     if (globalQuality !== 'custom') setGlobalQuality('custom');
   };
-  
-  const handleIndividualH264Change = (id, val) => {
-    setVideoH264(prev => ({ ...prev, [id]: val }));
-    if (globalQuality !== 'custom') setGlobalQuality('custom');
-  };
-  
-  // Download Queue State
-  const [downloadQueue, setDownloadQueue] = useState([]);
-  const [currentDownloadIndex, setCurrentDownloadIndex] = useState(-1);
-  const [isBatchDownloading, setIsBatchDownloading] = useState(false);
-
-  // Active Download Progress State
-  const [progress, setProgress] = useState(0);
-  const [progressText, setProgressText] = useState('');
-  const [downloadStage, setDownloadStage] = useState('starting');
-  const [speed, setSpeed] = useState(0);
-  const [eta, setEta] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
-  const [pauseReason, setPauseReason] = useState(null);
 
   const toggleVideo = (id) => {
     const next = new Set(selectedVideos);
@@ -110,494 +201,582 @@ const PlaylistView = () => {
   const handleSelectAll = () => setSelectedVideos(new Set(playlistDetails.videos.map(v => v.id)));
   const handleSelectNone = () => setSelectedVideos(new Set());
 
-  const handleChooseFolder = async () => {
-    const dir = await window.electronAPI.chooseDirectory();
-    if (dir) setTargetDir(dir);
-  };
-
-  const formatDuration = (seconds) => {
-    if (!seconds) return 'Live';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
+  // Total estimated size across selected videos (where known)
+  const totalEstimate = useMemo(() => {
+    let bytes = 0;
+    let unknown = 0;
+    for (const v of playlistDetails.videos) {
+      if (!selectedVideos.has(v.id)) continue;
+      const size = itemSizeBytes(v.id);
+      if (size > 0) bytes += size; else unknown++;
+    }
+    return { bytes, unknown };
+  }, [playlistDetails.videos, selectedVideos, itemSizeBytes]);
 
   const startBatchDownload = async () => {
-    if (!targetDir) {
-      alert("Please choose a destination folder first.");
-      return;
-    }
-    const toDownload = playlistDetails.videos
+    if (selectedVideos.size === 0) return;
+
+    // Ask for the destination when the user commits — same as single videos
+    const targetDir = await window.electronAPI.chooseDirectory();
+    if (!targetDir) return;
+
+    const items = playlistDetails.videos
       .filter(v => selectedVideos.has(v.id))
-      .map(v => ({
-        ...v,
-        customQuality: videoQualities[v.id] || (globalQuality === 'custom' ? 'best' : globalQuality),
-        customH264: videoH264[v.id] || false
-      }));
-    if (toDownload.length === 0) return;
+      .map(v => {
+        const q = resolveQuality(v.id);
+        const fmt = resolveFormat(v.id);
+        const isAudio = q === 'audio';
+        return {
+          id: v.id,
+          url: v.url,
+          title: v.title,
+          thumbnail: v.thumbnail,
+          duration: v.duration,
+          type: isAudio ? 'mp3' : 'mp4',
+          // "best" must resolve to the video's actual top height — passing the
+          // literal string made yt-dlp's fallback chain pick 1080p H.264 even
+          // for 4K videos.
+          quality: isAudio ? 'best' : (q === 'best' && fmt ? String(fmt.itag) : q),
+          qualityLabel: isAudio ? 'MP3' : (fmt?.quality || 'Best'),
+          convertToH264: effectiveConvert(v.id),
+          sizeBytes: itemSizeBytes(v.id),
+        };
+      });
 
-    setDownloadQueue(toDownload);
-    setCurrentDownloadIndex(0);
-    setIsBatchDownloading(true);
-    setIsDownloading(true);
-    setProgress(0);
-    setProgressText('Preparing download...');
-    setDownloadStage('starting');
-  };
+    const formatLabel =
+      globalQuality === 'audio' ? 'AUDIO (MP3)'
+        : globalQuality === 'best' ? 'Best (MP4)'
+        : globalQuality === 'custom' ? 'Custom (MP4)'
+        : `Up to ${globalQuality}p (MP4)`;
 
-  const cancelBatchDownload = () => {
-    window.electronAPI.cancelDownload({ keepOriginal: false });
-    setIsBatchDownloading(false);
-    setIsDownloading(false);
-    setIsPaused(false);
-    setPauseReason(null);
-  };
-
-  // Background format fetcher
-  useEffect(() => {
-    if (!playlistDetails || !playlistDetails.videos) return;
-    let isCancelled = false;
-    const fetchQueue = async () => {
-      for (const video of playlistDetails.videos) {
-        if (isCancelled) break;
-        
-        // Mark as loading safely
-        setVideoFormats(prev => {
-          if (prev[video.id]) return prev;
-          return { ...prev, [video.id]: { isLoading: true, formats: [] } };
-        });
-        
-        try {
-          const res = await window.electronAPI.getSingleVideoInfoSilent(video.url);
-          if (isCancelled) break;
-          
-          setVideoFormats(prev => {
-            if (res.success && res.formats) {
-              return { ...prev, [video.id]: { isLoading: false, formats: res.formats } };
-            }
-            return { ...prev, [video.id]: { isLoading: false, formats: [] } };
-          });
-        } catch(e) {
-          if (!isCancelled) {
-            setVideoFormats(prev => ({ ...prev, [video.id]: { isLoading: false, formats: [] } }));
-          }
-        }
-      }
-    };
-    fetchQueue();
-    return () => { isCancelled = true; };
-  }, [playlistDetails]);
-
-  // The Queue Manager Effect
-  useEffect(() => {
-    let isCancelled = false;
-    
-    const runNextDownload = async () => {
-      if (!isBatchDownloading || currentDownloadIndex < 0 || currentDownloadIndex >= downloadQueue.length) {
-        if (isBatchDownloading && currentDownloadIndex >= downloadQueue.length) {
-          // Finished
-          setIsBatchDownloading(false);
-          setIsDownloading(false);
-          
-          // Save a consolidated playlist history item
-          const historyItem = {
-            id: 'playlist-' + Date.now(),
-            type: 'playlist',
-            title: playlistDetails.title,
-            uploader: playlistDetails.uploader,
-            thumbnailUrl: downloadQueue[0]?.thumbnail || '',
-            url: playlistDetails.videos[0]?.url || '',
-            format: globalQuality === 'audio' ? 'AUDIO (MP3)' : (globalQuality === 'best' ? 'Best (MP4)' : `${globalQuality}p (MP4)`),
-            path: targetDir,
-            timestamp: new Date().toISOString(),
-            downloadedVideos: downloadQueue.map(v => ({ 
-              id: v.id,
-              title: v.title, 
-              url: v.url, 
-              thumbnailUrl: v.thumbnail,
-              duration: v.duration,
-              filePath: v.filePath
-            }))
-          };
-          await window.electronAPI.addHistoryItem(historyItem);
-          await refreshHistory();
-          goBackToHistory();
-        }
-        return;
-      }
-
-      const video = downloadQueue[currentDownloadIndex];
-      const effQuality = video.customQuality;
-      const type = effQuality === 'audio' ? 'mp3' : 'mp4';
-      const qualityParam = effQuality === 'audio' ? 'best' : effQuality;
-      
-      const options = {
-        videoId: video.id,
-        url: video.url,
-        title: video.title,
-        thumbnailUrl: video.thumbnail,
-        type: type,
-        quality: qualityParam,
-        qualityLabel: effQuality === 'audio' ? 'MP3' : (effQuality === 'best' ? 'Best' : `${effQuality}p`),
-        convertToH264: video.customH264,
-        targetDir: targetDir,
-        allowDuplicates: allowDuplicates,
-        skipHistory: true
-      };
-
-      try {
-        const result = await window.electronAPI.downloadVideo(options);
-        if (!isCancelled) {
-           if (result && result.success && result.path) {
-             setDownloadQueue(prev => {
-               const newQ = [...prev];
-               newQ[currentDownloadIndex] = { ...newQ[currentDownloadIndex], filePath: result.path };
-               return newQ;
-             });
-           }
-           setCurrentDownloadIndex(prev => prev + 1);
-        }
-      } catch (err) {
-        console.error("Batch download error:", err);
-        if (!isCancelled) {
-           setCurrentDownloadIndex(prev => prev + 1);
-        }
-      }
-    };
-
-    if (isBatchDownloading && currentDownloadIndex >= 0) {
-      runNextDownload();
+    const res = await window.electronAPI.queuePlaylist({
+      title: playlistDetails.title,
+      uploader: playlistDetails.uploader,
+      url: playlistDetails.sourceUrl || '',
+      targetDir,
+      allowDuplicates,
+      formatLabel,
+      thumbnailUrl: items[0]?.thumbnail || '',
+      items,
+    });
+    if (res.success) {
+      setBoundJobId(res.jobId);
+    } else {
+      console.error('Failed to queue playlist:', res.error);
     }
+  };
 
-    return () => { isCancelled = true; };
-  }, [isBatchDownloading, currentDownloadIndex, downloadQueue, targetDir, globalQuality, allowDuplicates]);
-
-  // Progress Listener
+  // ── Progress-mode derived values ───────────────────────────────────────────
+  // Keep a snapshot of items so the list stays visible after the job finishes
+  // (finished jobs leave the main-process queue)
+  const [itemsSnapshot, setItemsSnapshot] = useState([]);
   useEffect(() => {
-    const listener = (data) => {
-      if (data.paused !== undefined) {
-        setIsPaused(data.paused);
-        setPauseReason(data.reason || null);
-        if (data.stage) setDownloadStage(data.stage);
-        return;
-      }
+    if (boundJob?.items?.length) setItemsSnapshot(boundJob.items);
+  }, [boundJob]);
 
-      const { percent = 0, downloadedBytes = 0, totalBytes = 0, stage = 'starting', speed = 0, eta = 0, elapsed = 0 } = data;
-      setProgress(percent);
-      setDownloadStage(stage);
-      setSpeed(speed);
-      setEta(eta);
-      setElapsed(elapsed);
+  const progress = (boundJobId && jobProgress[boundJobId]) || {};
+  const items = boundJob?.items || itemsSnapshot;
+  const completedCount = items.filter(it => it.status === 'completed').length;
+  const doneCount = items.filter(it => ['completed', 'error', 'skipped', 'cancelled'].includes(it.status)).length;
+  const currentItem = boundJob?.status === 'downloading' ? items.find(it => it.status === 'downloading') : null;
+  const isQueuedJob = boundJob?.status === 'queued';
+  const queuePosition = isQueuedJob ? activeJobs.findIndex(j => j.id === boundJobId) + 1 : 0;
+  const overallPercent = items.length > 0
+    ? Math.min(100, ((doneCount + (currentItem ? (progress.percent || 0) / 100 : 0)) / items.length) * 100)
+    : 0;
+  const isPaused = !!progress.paused;
+  const pauseReason = progress.pauseReason || null;
+  const stage = progress.stage || 'starting';
 
-      if (stage === 'merging' || stage === 'processing') {
-        setProgressText('Merging Audio & Video...');
-      } else if (totalBytes > 0) {
-        setProgressText(`${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`);
-      } else if (percent > 0) {
-        setProgressText(`${percent.toFixed(1)}%`);
-      } else {
-        setProgressText('Starting download...');
-      }
-    };
-    window.electronAPI.onDownloadProgress(listener);
-  }, []);
+  const progressText = useMemo(() => {
+    const { percent = 0, downloadedBytes = 0, totalBytes = 0 } = progress;
+    if (stage === 'merging' || stage === 'processing') return 'Merging audio & video…';
+    if (stage === 'converting') return `Converting — ${(percent || 0).toFixed(0)}%`;
+    if (totalBytes > 0) return `${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
+    if (percent > 0) return `${percent.toFixed(1)}%`;
+    return 'Starting…';
+  }, [progress, stage]);
 
-  return (
-    <div className="flex flex-col h-full bg-background relative">
-      {/* Header & Main Controls Area */}
-      <div className="flex-none border-b border-border/40 p-5 space-y-4">
-        {/* Top Header Row */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            <Button variant="ghost" size="icon" onClick={goBackToHistory} className="mt-0.5 shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground" disabled={isBatchDownloading}>
+  // ══════════════════════════════════════════════════════════════════════════
+  // PROGRESS MODE — bound to an in-flight (or finished) playlist job
+  // ══════════════════════════════════════════════════════════════════════════
+  if (inProgressMode) {
+    const finished = !boundJob && boundResult;
+
+    return (
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="flex-none border-b border-border/40 pb-4 space-y-3.5">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-bold truncate tracking-tight text-foreground">{playlistDetails.title}</h2>
-              <p className="text-sm text-muted-foreground truncate mt-0.5">
-                {playlistDetails.videos.length} videos • by {playlistDetails.uploader}
+              <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight">{boundJob?.title || playlistDetails.title}</h2>
+              <p className="text-xs text-muted-foreground truncate mt-0.5">
+                {finished
+                  ? `${boundResult.completedCount ?? completedCount} of ${items.length || (boundResult.completedCount ?? 0)} videos downloaded`
+                  : isQueuedJob
+                    ? `${items.length} videos • waiting in queue`
+                    : `${completedCount} of ${items.length} videos completed`}
               </p>
             </div>
+
+            {!finished && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                {!isQueuedJob && canPause && (
+                  isPaused && pauseReason !== 'network' ? (
+                    <Button variant="secondary" size="sm" className="h-8 text-xs gap-1.5 px-3" onClick={() => window.electronAPI.resumeDownload()}>
+                      <Play className="h-3.5 w-3.5" /> Resume
+                    </Button>
+                  ) : !isPaused ? (
+                    <Button variant="ghost" size="sm" className="h-8 text-xs gap-1.5 px-3 text-muted-foreground hover:text-foreground" onClick={() => window.electronAPI.pauseDownload()} disabled={stage === 'merging' || stage === 'processing'}>
+                      <Pause className="h-3.5 w-3.5" /> Pause
+                    </Button>
+                  ) : null
+                )}
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" size="sm" className="h-8 text-xs font-medium px-3 gap-1.5">
+                      <X className="h-3.5 w-3.5" />
+                      Cancel
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Cancel playlist download?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The current video will be stopped and the rest of the playlist will be cancelled. Videos already completed will be kept.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Keep downloading</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => window.electronAPI.cancelJob({ jobId: boundJobId })} className="bg-destructive text-white hover:bg-destructive/90">
+                        Cancel Download
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            )}
           </div>
 
-          {/* Right side controls - only show when NOT downloading */}
-          {!isBatchDownloading && (
-            <div className="flex items-center gap-2 shrink-0">
-              <Select value={globalQuality} onValueChange={handleGlobalQualityChange}>
-                <SelectTrigger className="w-[140px] h-9 text-xs font-medium bg-secondary/30 border-border/50 hover:bg-secondary/50 transition-colors">
-                  <SelectValue placeholder="Quality" />
-                </SelectTrigger>
-                <SelectContent>
-                  {globalQuality === 'custom' && <SelectItem value="custom" className="text-xs italic">Custom</SelectItem>}
-                  <SelectItem value="best" className="text-xs">Best Available MP4</SelectItem>
-                  <SelectItem value="2160" className="text-xs">Up to 4K (2160p)</SelectItem>
-                  <SelectItem value="1440" className="text-xs">Up to 2K (1440p)</SelectItem>
-                  <SelectItem value="1080" className="text-xs">Up to 1080p</SelectItem>
-                  <SelectItem value="720" className="text-xs">Up to 720p</SelectItem>
-                  <SelectItem value="audio" className="text-xs">Audio Only (MP3)</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Button 
-                variant="outline" 
-                size="sm"
-                className={`h-9 px-3 gap-2 border-border/50 bg-secondary/30 hover:bg-secondary/50 transition-colors text-xs font-medium ${targetDir ? 'text-primary border-primary/30' : ''}`}
-                onClick={handleChooseFolder}
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-                <span className="truncate max-w-[120px]">{targetDir ? targetDir.split(/[\\/]/).pop() : "Choose Folder"}</span>
-              </Button>
+          {/* Overall progress / status banner */}
+          {finished ? (
+            (() => {
+              const nDone = boundResult.completedCount ?? completedCount;
+              const wasCancelled = !!boundResult.cancelled;
+              const ok = boundResult.success || nDone > 0;
+              return (
+                <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${ok ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-border/40 bg-secondary/20'}`}>
+                  {ok ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                  <span className={`text-[13px] flex-1 ${ok ? 'text-emerald-300/90' : 'text-muted-foreground'}`}>
+                    {wasCancelled
+                      ? nDone > 0
+                        ? `Cancelled — ${nDone} completed ${nDone === 1 ? 'video was' : 'videos were'} kept`
+                        : 'Download cancelled'
+                      : ok
+                        ? 'Playlist download complete'
+                        : 'Download failed — no videos were saved'}
+                  </span>
+                  {ok && boundResult.path && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300"
+                      onClick={() => window.electronAPI.openFileOrFolder({ filePath: null, fallbackDir: boundResult.path })}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      Open Folder
+                    </Button>
+                  )}
+                </div>
+              );
+            })()
+          ) : isQueuedJob ? (
+            <div className="flex items-center gap-3 rounded-xl border border-border/40 bg-secondary/20 px-4 py-3">
+              <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span className="text-[13px] text-foreground/80 flex-1">
+                In queue {queuePosition > 1 ? `— position ${queuePosition}` : '— starting soon…'}
+              </span>
+              {boundJob?.sizeBytes > 0 && (
+                <span className="text-[11px] font-mono text-muted-foreground">{formatBytes(boundJob.sizeBytes)}</span>
+              )}
             </div>
-          )}
-
-          {/* Active Download Top Right Controls */}
-          {isBatchDownloading && (
-            <div className="flex items-center gap-2 shrink-0">
-               <span className="text-sm font-semibold text-foreground mr-2">
-                  {currentDownloadIndex + 1} / {downloadQueue.length}
-               </span>
-               <AlertDialog>
-                 <AlertDialogTrigger asChild>
-                   <Button variant="destructive" size="sm" className="h-8 text-xs font-medium px-3 gap-1.5 shadow-sm">
-                     <X className="h-3.5 w-3.5" />
-                     Cancel
-                   </Button>
-                 </AlertDialogTrigger>
-                 <AlertDialogContent>
-                   <AlertDialogHeader>
-                     <AlertDialogTitle>Cancel Playlist Download?</AlertDialogTitle>
-                     <AlertDialogDescription>
-                       The current video download will be stopped, and the rest of the playlist will be cancelled. Videos already completed will remain.
-                     </AlertDialogDescription>
-                   </AlertDialogHeader>
-                   <AlertDialogFooter>
-                     <AlertDialogCancel>Continue downloading</AlertDialogCancel>
-                     <AlertDialogAction onClick={cancelBatchDownload} className="bg-destructive text-white hover:bg-destructive/90">
-                       Cancel Download
-                     </AlertDialogAction>
-                   </AlertDialogFooter>
-                 </AlertDialogContent>
-               </AlertDialog>
+          ) : (
+            <div className={`rounded-xl border px-4 py-3 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/20'}`}>
+              <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
+                <span className={`text-xs font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
+                  {isPaused
+                    ? (pauseReason === 'network' ? 'Waiting for connection…' : 'Paused')
+                    : `Downloading ${Math.min(doneCount + 1, items.length)} of ${items.length}`}
+                </span>
+                <span className="text-[11px] font-mono tabular-nums text-muted-foreground whitespace-nowrap">
+                  {Math.round(overallPercent)}%
+                </span>
+              </div>
+              <Progress value={overallPercent} paused={isPaused} className="h-1.5" />
             </div>
           )}
         </div>
 
-        {/* Action Bar (Download & Selection) */}
-        {!isBatchDownloading && (
-          <div className="flex items-center justify-between bg-secondary/10 px-4 py-2.5 rounded-xl border border-border/30">
-            {/* Selection */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-semibold text-foreground/80 w-16">{selectedVideos.size} selected</span>
-              <div className="h-4 w-px bg-border/50" />
-              <Button variant="ghost" size="sm" onClick={handleSelectAll} className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground">Select All</Button>
-              <Button variant="ghost" size="sm" onClick={handleSelectNone} className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground">Clear</Button>
+        {/* Items list */}
+        <ScrollArea className="flex-1 -mx-2 px-2">
+          <div className="flex flex-col gap-2 py-3 pb-6">
+            {items.map((it) => {
+              const isCurrent = currentItem?.id === it.id;
+              const rowState = it.status;
+
+              const thumbnail = (
+                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
+                  <img src={it.thumbnail} alt="" className="w-full h-full object-cover" onError={thumbFallback} />
+                  <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold">
+                    {formatDuration(it.duration)}
+                  </div>
+                  {rowState === 'completed' && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-400 drop-shadow-md" />
+                    </div>
+                  )}
+                </div>
+              );
+
+              const info = (
+                <div className="flex-1 min-w-0 flex flex-col justify-center gap-1">
+                  <h3 className="font-medium text-[13px] truncate text-foreground leading-snug" title={it.title}>
+                    {it.title}
+                  </h3>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span className="truncate">{it.qualityLabel}{it.convertToH264 ? ' → H.264' : ''}</span>
+                    {it.sizeBytes > 0 && (
+                      <>
+                        <span className="text-border">·</span>
+                        <span className="font-mono shrink-0 tabular-nums">{formatBytes(it.sizeBytes)}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+
+              // Active item — column layout with a full-width progress panel,
+              // no reserved status column eating space on the right
+              if (isCurrent) {
+                return (
+                  <div key={it.id} className="flex flex-col gap-2.5 p-3 rounded-xl border bg-primary/[0.04] border-primary/40 transition-all duration-200">
+                    <div className="flex items-center gap-3.5">
+                      {thumbnail}
+                      {info}
+                    </div>
+
+                    <div className={`rounded-lg border px-3 py-2 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/30'}`}>
+                      <div className="flex justify-between items-center gap-3 mb-1.5 min-w-0">
+                        <span className={`text-[10px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
+                          {isPaused
+                            ? (pauseReason === 'network' ? 'Waiting for connection…' : 'Paused')
+                            : (stage === 'converting' ? 'Converting to H.264…' : stage === 'merging' ? 'Merging…' : 'Downloading…')}
+                        </span>
+                        <span className="text-[10px] font-mono tabular-nums tracking-tight text-muted-foreground whitespace-nowrap truncate min-w-0">
+                          {progressText}
+                        </span>
+                      </div>
+                      <Progress
+                        value={progress.percent || 0}
+                        indeterminate={(progress.percent || 0) <= 0 && !isPaused}
+                        paused={isPaused}
+                        className="h-1"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between -mt-1">
+                      <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
+                        {!isPaused && progress.speed > 0
+                          ? (stage === 'converting' ? `${progress.speed.toFixed(2)}x` : `${formatBytes(progress.speed)}/s`)
+                          : ''}
+                        {!isPaused && progress.eta > 0 ? `  ·  ${formatTime(progress.eta)} left` : ''}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => window.electronAPI.skipPlaylistItem({ jobId: boundJobId })}
+                        className="h-6 text-[10px] px-2 gap-1 text-muted-foreground hover:text-foreground"
+                      >
+                        <SkipForward className="h-3 w-3" />
+                        Skip
+                      </Button>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={it.id}
+                  className={`flex items-center gap-3.5 p-3 rounded-xl border bg-secondary/10 border-border/30 transition-all duration-200
+                    ${rowState === 'completed' ? 'opacity-60' : ''}
+                    ${['skipped', 'cancelled', 'error'].includes(rowState) ? 'opacity-45' : ''}
+                  `}
+                >
+                  {thumbnail}
+                  {info}
+
+                  {/* Status */}
+                  <div className="flex items-center shrink-0 pr-1">
+                    {rowState === 'queued' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Queued</span>}
+                    {rowState === 'completed' && <CheckCircle2 className="h-4 w-4 text-emerald-500/80" />}
+                    {rowState === 'error' && (
+                      <Tooltip>
+                        <TooltipTrigger asChild><AlertCircle className="h-4 w-4 text-destructive-foreground/70" /></TooltipTrigger>
+                        <TooltipContent side="left" className="text-xs">Download failed</TooltipContent>
+                      </Tooltip>
+                    )}
+                    {rowState === 'skipped' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Skipped</span>}
+                    {rowState === 'cancelled' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Stopped</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SELECTION MODE
+  // ══════════════════════════════════════════════════════════════════════════
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex-none border-b border-border/40 pb-3.5 space-y-3">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight flex items-center gap-2">
+              <ListVideo className="h-4.5 w-4.5 text-muted-foreground shrink-0" />
+              <span className="truncate">{playlistDetails.title}</span>
+            </h2>
+            <p className="text-xs text-muted-foreground truncate mt-0.5">
+              {playlistDetails.videos.length} videos • {playlistDetails.uploader}
+            </p>
+          </div>
+        </div>
+
+        <div className="ml-11 flex flex-col gap-2.5">
+          {/* Options row */}
+          <div className="flex items-center gap-2">
+            <Select value={globalQuality} onValueChange={handleGlobalQualityChange}>
+              <SelectTrigger className="w-44 h-9 text-xs font-medium bg-secondary/30 border-border/50 hover:bg-secondary/50 transition-colors shrink-0">
+                <SelectValue placeholder="Quality" />
+              </SelectTrigger>
+              <SelectContent>
+                {globalQuality === 'custom' && <SelectItem value="custom" className="text-xs italic">Custom</SelectItem>}
+                <SelectItem value="best" className="text-xs">Best Available</SelectItem>
+                <SelectItem value="2160" className="text-xs">4K (2160p)</SelectItem>
+                <SelectItem value="1440" className="text-xs">2K (1440p)</SelectItem>
+                <SelectItem value="1080" className="text-xs">1080p</SelectItem>
+                <SelectItem value="720" className="text-xs">720p</SelectItem>
+                <SelectItem value="audio" className="text-xs">Audio only (MP3)</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* Playlist-wide H.264 conversion */}
+            <label
+              className={`flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 transition-colors select-none
+                ${globalQuality === 'audio' ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}`}
+            >
+              <Checkbox
+                checked={globalH264}
+                disabled={globalQuality === 'audio'}
+                onCheckedChange={(c) => setGlobalH264(!!c)}
+                className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+              />
+              <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
+                Convert to H.264
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="h-3.5 w-3.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors outline-none" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs max-w-60">
+                  Re-encodes VP9/AV1 videos to H.264 on-device after downloading, so they open in Premiere, Final Cut and iMovie. Only applies to videos that need it. Uses extra CPU and time.
+                </TooltipContent>
+              </Tooltip>
+            </label>
+
+            {/* Overwrite */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer select-none">
+                  <Checkbox
+                    checked={!allowDuplicates}
+                    onCheckedChange={(c) => setAllowDuplicates(!c)}
+                    className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+                  />
+                  <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
+                    Overwrite files
+                  </span>
+                </label>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                If checked, existing files with the same name will be replaced.
+              </TooltipContent>
+            </Tooltip>
+          </div>
+
+          {/* Selection + download row */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs font-medium text-foreground/80 tabular-nums">{selectedVideos.size} selected</span>
+              <div className="h-3.5 w-px bg-border/60" />
+              <button onClick={handleSelectAll} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer">All</button>
+              <button onClick={handleSelectNone} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer">None</button>
             </div>
 
-            {/* Overwrite & Download */}
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5">
-                 <Checkbox 
-                   id="overwrite"
-                   checked={!allowDuplicates}
-                   onCheckedChange={(c) => setAllowDuplicates(!c)}
-                   className="h-3.5 w-3.5 rounded-[3px] data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground cursor-pointer"
-                 />
-                 <label htmlFor="overwrite" className="text-xs font-medium text-muted-foreground select-none cursor-pointer leading-none">
-                   Overwrite files
-                 </label>
-                 <TooltipProvider>
-                   <Tooltip>
-                     <TooltipTrigger asChild>
-                       <Info className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help ml-0.5 outline-none" />
-                     </TooltipTrigger>
-                     <TooltipContent side="top" className="text-xs">
-                       If checked, any existing files with the same name will be replaced.
-                     </TooltipContent>
-                   </Tooltip>
-                 </TooltipProvider>
-              </div>
-
-              <Button 
-                size="sm"
-                className="h-8 px-4 gap-2 transition-all shadow-sm font-semibold"
+            <div className="flex items-center gap-3">
+              {totalEstimate.bytes > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
+                  <HardDrive className="h-3.5 w-3.5 opacity-60" />
+                  <span className="tabular-nums">
+                    {totalEstimate.unknown > 0 ? '≥ ' : '~'}{formatBytes(totalEstimate.bytes)}
+                  </span>
+                </div>
+              )}
+              <Button
+                className="h-9 px-5 gap-2 font-semibold shadow-sm"
                 onClick={startBatchDownload}
                 disabled={selectedVideos.size === 0}
               >
-                <Download className="h-3.5 w-3.5" />
-                Download Selected
+                <Download className="h-4 w-4" />
+                Download
               </Button>
             </div>
           </div>
-        )}
+        </div>
       </div>
 
-      {/* List Area */}
-      <ScrollArea className="flex-1 px-5 pt-3 pb-6">
-        <div className="space-y-2">
+      {/* Video list */}
+      <ScrollArea className="flex-1 -mx-2 px-2">
+        <div className="flex flex-col gap-2 py-3 pb-6">
           {playlistDetails.videos.map((video) => {
             const isSelected = selectedVideos.has(video.id);
-            const isCurrent = currentDownloadIndex >= 0 && downloadQueue[currentDownloadIndex]?.id === video.id;
-            const isFinished = currentDownloadIndex >= 0 && downloadQueue.findIndex(v => v.id === video.id) < currentDownloadIndex;
-            
+            const entry = videoFormats[video.id];
+            const isLoadingFormats = !entry || entry.isLoading;
+            const fmts = entry?.formats || [];
+            const effQuality = resolveQuality(video.id);
+            const effFormat = resolveFormat(video.id);
+            const showH264 = effQuality !== 'audio' && !!effFormat && !effFormat.isH264;
+            const size = itemSizeBytes(video.id);
+            const converted = effectiveConvert(video.id);
+
             return (
-              <div 
+              <div
                 key={video.id}
-                className={`flex items-stretch gap-4 p-2.5 rounded-xl border transition-all duration-200 group
-                  ${isSelected ? 'bg-secondary/10 border-primary/20 shadow-sm' : 'bg-background border-border/20 opacity-70 hover:opacity-100'}
-                  ${isCurrent ? 'bg-primary/5 border-primary/50 shadow-md' : ''}
-                  ${isFinished ? 'opacity-50 grayscale-[20%]' : ''}
+                className={`flex items-center gap-3.5 p-3 rounded-xl border transition-all duration-200
+                  ${isSelected ? 'bg-secondary/15 border-border/40' : 'bg-background border-border/20 opacity-50 hover:opacity-80'}
                 `}
               >
-                {/* Checkbox Col */}
-                <div className="flex flex-col justify-center shrink-0 pl-1">
-                  <Checkbox 
-                    checked={isSelected}
-                    onCheckedChange={() => toggleVideo(video.id)}
-                    disabled={isBatchDownloading}
-                    className="cursor-pointer h-4 w-4 rounded-[4px]"
-                  />
-                </div>
+                {/* Checkbox */}
+                <Checkbox
+                  checked={isSelected}
+                  onCheckedChange={() => toggleVideo(video.id)}
+                  className="cursor-pointer h-4 w-4 rounded-[4px] shrink-0"
+                />
 
-                {/* Thumbnail Col */}
-                <div className="relative w-[110px] aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
-                  <img 
-                    src={video.thumbnail} 
-                    alt="" 
-                    className="w-full h-full object-cover" 
-                    onError={(e) => {
-                      if (e.target.src.includes('maxresdefault')) {
-                        e.target.src = e.target.src.replace(/maxresdefault\.(jpg|webp)/, 'hqdefault.jpg');
-                      } else if (e.target.src.includes('sd2.jpg') || e.target.src.includes('sddefault.jpg')) {
-                        e.target.src = e.target.src.replace(/sd2\.jpg|sddefault\.jpg/, 'hqdefault.jpg');
-                      } else {
-                        e.target.style.opacity = 0;
-                      }
-                    }}
-                  />
+                {/* Thumbnail */}
+                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
+                  <img src={video.thumbnail} alt="" className="w-full h-full object-cover" onError={thumbFallback} />
                   <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold">
                     {formatDuration(video.duration)}
                   </div>
-                  {isFinished && (
-                     <div className="absolute inset-0 bg-primary/20 flex items-center justify-center backdrop-blur-[1px]">
-                        <CheckCircle2 className="h-6 w-6 text-primary drop-shadow-md" />
-                     </div>
-                  )}
                 </div>
 
-                {/* Info & Progress Col */}
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                  <h3 
-                    className={`font-semibold text-sm truncate mb-0.5 ${!isBatchDownloading ? 'cursor-pointer hover:text-primary transition-colors hover:underline' : 'text-foreground'}`}
-                    onClick={() => {
-                      if (!isBatchDownloading) window.electronAPI.openExternalLink(video.url);
-                    }}
+                {/* Title + meta */}
+                <div className="flex-1 min-w-0 flex flex-col justify-center gap-1">
+                  <h3
+                    className="font-medium text-[13px] truncate cursor-pointer hover:text-primary transition-colors leading-snug"
+                    onClick={() => window.electronAPI.openExternalLink(video.url)}
                     title={video.title}
                   >
                     {video.title}
                   </h3>
-                  <p className="text-xs text-muted-foreground truncate">{video.uploader}</p>
-                  
-                  {/* Inline Progress for active download */}
-                  {isCurrent && (
-                    <div className="mt-3 flex flex-col gap-2 pr-2 animate-in fade-in duration-200">
-                       {/* Slim Stats Row */}
-                       <div className="flex bg-secondary/30 border border-border/30 rounded-md divide-x divide-border/30 overflow-hidden shadow-sm">
-                         <div className="flex-1 px-2 py-1.5 flex items-center justify-between">
-                           <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">Speed</span>
-                           <span className="text-[10px] font-mono font-medium text-foreground">
-                             {!isPaused && speed > 0 ? `${formatBytes(speed)}/s` : '--'}
-                           </span>
-                         </div>
-                         <div className="flex-1 px-2 py-1.5 flex items-center justify-between">
-                           <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">Elapsed</span>
-                           <span className="text-[10px] font-mono font-medium text-foreground">{formatTime(elapsed)}</span>
-                         </div>
-                         <div className="flex-1 px-2 py-1.5 flex items-center justify-between">
-                           <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">Left</span>
-                           <span className="text-[10px] font-mono font-medium text-foreground">{!isPaused && speed > 0 && eta > 0 ? formatTime(eta) : '--:--'}</span>
-                         </div>
-                       </div>
-                       
-                       {/* Progress Bar & Text */}
-                       <div className={`rounded-md border px-2.5 py-2 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/30'}`}>
-                         <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
-                           <span className={`text-[10px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
-                             {isPaused 
-                               ? (pauseReason === 'network' ? 'Waiting for connection...' : 'Paused') 
-                               : (downloadStage === 'starting' ? 'Starting...' : 'Downloading...')}
-                           </span>
-                           <span className="text-[10px] font-mono tabular-nums tracking-tight text-muted-foreground whitespace-nowrap truncate min-w-0">
-                             {progressText}
-                           </span>
-                         </div>
-                         <Progress 
-                           value={progress} 
-                           indeterminate={progress <= 0 && !isPaused}
-                           paused={isPaused} 
-                           className="h-1.5" 
-                         />
-                       </div>
-                       
-                       {/* Actions */}
-                       <div className="flex justify-end gap-2 mt-0.5">
-                          <Button variant="ghost" size="sm" onClick={() => window.electronAPI.cancelDownload({ keepOriginal: false })} className="h-6 text-[10px] px-2 text-destructive hover:text-destructive hover:bg-destructive/10">
-                            Cancel Item
-                          </Button>
-                          {isPaused && pauseReason !== 'network' ? (
-                            <Button variant="ghost" size="sm" onClick={() => window.electronAPI.resumeDownload()} className="h-6 text-[10px] px-2 gap-1 hover:bg-secondary/50 text-foreground">
-                              <Play className="h-3 w-3" /> Resume
-                            </Button>
-                          ) : !isPaused ? (
-                            <Button variant="ghost" size="sm" onClick={() => window.electronAPI.pauseDownload()} className="h-6 text-[10px] px-2 gap-1 hover:bg-secondary/50 text-muted-foreground hover:text-foreground" disabled={downloadStage === 'merging' || downloadStage === 'processing'}>
-                              <Pause className="h-3 w-3" /> Pause
-                            </Button>
-                          ) : null}
-                       </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Settings Col */}
-                {!isBatchDownloading && (
-                  <div className="flex flex-col justify-center items-end shrink-0 gap-2 w-[140px] min-w-[140px] pl-2 border-l border-border/20">
-                    {videoFormats[video.id]?.isLoading ? (
-                      <div className="flex items-center justify-center w-full h-8 text-muted-foreground">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                      </div>
-                    ) : (
+                  <div className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted-foreground">
+                    <p className="truncate">{video.uploader}</p>
+                    {!isLoadingFormats && size > 0 && (
                       <>
-                        <Select 
-                          value={videoQualities[video.id] || (globalQuality === 'custom' ? 'best' : globalQuality)} 
-                          onValueChange={(val) => handleIndividualQualityChange(video.id, val)}
-                        >
-                          <SelectTrigger className="w-full h-7 text-[10px] bg-secondary/20 hover:bg-secondary/40 border-border/40 transition-colors">
-                            <SelectValue placeholder="Quality" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="best" className="text-[10px]">Best Available</SelectItem>
-                            {videoFormats[video.id]?.formats?.map(f => (
-                              <SelectItem key={f.itag} value={f.height?.toString() || f.itag} className="text-[10px]">{f.quality}</SelectItem>
-                            ))}
-                            <SelectItem value="audio" className="text-[10px]">Audio Only</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <div className="flex items-center gap-1.5 w-full justify-end">
-                          <label className="text-[9px] text-muted-foreground whitespace-nowrap cursor-pointer hover:text-foreground transition-colors" htmlFor={`h264-${video.id}`}>
-                            Convert to H.264
-                          </label>
-                          <Checkbox 
-                            id={`h264-${video.id}`}
-                            checked={videoH264[video.id] || false}
-                            onCheckedChange={(val) => handleIndividualH264Change(video.id, val)}
-                            className="h-3 w-3 rounded-[3px]"
-                          />
-                        </div>
+                        <span className="text-border shrink-0">·</span>
+                        <span className="font-mono text-muted-foreground/70 shrink-0 tabular-nums">
+                          {converted ? '~' : ''}{formatBytes(size)}
+                        </span>
                       </>
                     )}
                   </div>
-                )}
+                </div>
+
+                {/* Per-video controls */}
+                <div className="flex flex-col justify-center gap-1.5 w-[172px] shrink-0">
+                  {isLoadingFormats ? (
+                    <>
+                      <div className="w-full h-8 rounded-md bg-secondary/40 animate-pulse" />
+                      <div className="w-1/2 h-3.5 rounded bg-secondary/30 animate-pulse self-end" />
+                    </>
+                  ) : (
+                    <>
+                      <Select
+                        value={effQuality}
+                        onValueChange={(val) => handleIndividualQualityChange(video.id, val)}
+                      >
+                        <SelectTrigger className="w-full h-8 text-[11px] bg-secondary/25 hover:bg-secondary/45 border-border/40 transition-colors px-2.5">
+                          <SelectValue placeholder="Quality" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="best" className="text-[11px]">
+                            {fmts.length > 0 ? `Best · ${fmts[0].quality}` : 'Best Available'}
+                          </SelectItem>
+                          {fmts.map(f => (
+                            <SelectItem key={f.itag} value={String(f.itag)} className="text-[11px]">
+                              {f.quality}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="audio" className="text-[11px]">Audio only</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {showH264 && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <label
+                              htmlFor={`h264-${video.id}`}
+                              className={`flex items-center gap-1.5 justify-end pr-0.5 select-none transition-opacity
+                                ${globalH264 ? 'opacity-50' : 'cursor-pointer'}`}
+                            >
+                              <Checkbox
+                                id={`h264-${video.id}`}
+                                checked={globalH264 || !!videoH264[video.id]}
+                                disabled={globalH264}
+                                onCheckedChange={(val) => setVideoH264(prev => ({ ...prev, [video.id]: !!val }))}
+                                className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+                              />
+                              <span className="text-[11px] text-muted-foreground leading-none whitespace-nowrap">
+                                Convert to H.264
+                              </span>
+                            </label>
+                          </TooltipTrigger>
+                          <TooltipContent side="left" className="text-xs max-w-56">
+                            {globalH264
+                              ? 'Controlled by the playlist-wide setting above.'
+                              : 'This quality is VP9/AV1 — convert on-device to H.264 for editing-software compatibility.'}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -608,4 +787,3 @@ const PlaylistView = () => {
 };
 
 export default PlaylistView;
-// force HMR trigger

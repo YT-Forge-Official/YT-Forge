@@ -18,7 +18,8 @@ export default defineConfig({
         'electron-updater',
         'ffmpeg-static',
         'ffprobe-static',
-        'electron-store',
+        // NOTE: electron-store is deliberately NOT external — v10 is ESM-only
+        // and require() of it crashes under Electron's Node, so vite bundles it.
         ...builtinModules,
         ...builtinModules.map((m) => `node:${m}`),
       ],
