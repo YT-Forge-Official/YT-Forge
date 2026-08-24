@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   ArrowLeft, Download, FolderOpen, CheckCircle2, AlertCircle,
-  Play, Pause, X, Clock, HardDrive, SkipForward, ListVideo, Info,
+  Play, Pause, X, Clock, HardDrive, SkipForward, ListVideo, Info, ImageDown,
 } from 'lucide-react';
 import {
   Select,
@@ -432,16 +432,29 @@ const PlaylistView = () => {
               const rowState = it.status;
 
               const thumbnail = (
-                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
+                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30 group">
                   <img src={it.thumbnail} alt="" className="w-full h-full object-cover" onError={thumbFallback} />
-                  <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold">
+                  <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold group-hover:opacity-0 transition-opacity">
                     {formatDuration(it.duration)}
                   </div>
                   {rowState === 'completed' && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center group-hover:opacity-0 transition-opacity">
                       <CheckCircle2 className="h-5 w-5 text-emerald-400 drop-shadow-md" />
                     </div>
                   )}
+                  <button
+                    className="absolute inset-0 m-auto flex items-center justify-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-2 py-1 text-[10px] text-white/80 hover:text-white hover:bg-black/80 transition-all opacity-0 group-hover:opacity-100 cursor-pointer border-none h-fit w-fit z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.electronAPI.downloadThumbnail({
+                        url: it.thumbnail,
+                        title: it.title,
+                      });
+                    }}
+                    title="Download Thumbnail"
+                  >
+                    <ImageDown className="h-3 w-3" />
+                  </button>
                 </div>
               );
 
@@ -496,7 +509,8 @@ const PlaylistView = () => {
                         {!isPaused && progress.speed > 0
                           ? (stage === 'converting' ? `${progress.speed.toFixed(2)}x` : `${formatBytes(progress.speed)}/s`)
                           : ''}
-                        {!isPaused && progress.eta > 0 ? `  ·  ${formatTime(progress.eta)} left` : ''}
+                        {!isPaused && progress.speed > 0 && progress.eta > 0 ? ' · ' : ''}
+                        {!isPaused && progress.eta > 0 ? `${formatTime(progress.eta)} left` : ''}
                       </span>
                       <Button
                         variant="ghost"
@@ -689,11 +703,24 @@ const PlaylistView = () => {
                 />
 
                 {/* Thumbnail */}
-                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
+                <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30 group">
                   <img src={video.thumbnail} alt="" className="w-full h-full object-cover" onError={thumbFallback} />
-                  <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold">
+                  <div className="absolute bottom-1 right-1 bg-black/70 backdrop-blur-sm text-white text-[9px] px-1.5 py-0.5 rounded shadow-sm font-semibold group-hover:opacity-0 transition-opacity">
                     {formatDuration(video.duration)}
                   </div>
+                  <button
+                    className="absolute inset-0 m-auto flex items-center justify-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-2 py-1 text-[10px] text-white/80 hover:text-white hover:bg-black/80 transition-all opacity-0 group-hover:opacity-100 cursor-pointer border-none h-fit w-fit"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.electronAPI.downloadThumbnail({
+                        url: video.thumbnail,
+                        title: video.title,
+                      });
+                    }}
+                    title="Download Thumbnail"
+                  >
+                    <ImageDown className="h-3 w-3" />
+                  </button>
                 </div>
 
                 {/* Title + meta */}

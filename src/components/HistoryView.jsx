@@ -247,7 +247,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
       </Tooltip>
 
       <AlertDialogContent className="sm:max-w-md bg-background border border-border/30 shadow-2xl p-0 overflow-hidden outline-none rounded-xl gap-0">
-        <div className="px-6 pt-6 pb-5 max-h-[80vh] overflow-y-auto">
+        <div className="px-5 pt-6 pb-5 max-h-[80vh] overflow-y-auto">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <AlertDialogTitle className="text-lg font-semibold tracking-tight">
@@ -370,7 +370,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 bg-muted/20 border-t border-border/30 flex items-center justify-between gap-2">
+        <div className="px-5 py-4 bg-muted/20 border-t border-border/30 flex items-center justify-between gap-2">
           <Button
             variant="ghost"
             size="sm"
@@ -528,7 +528,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                         className="h-8 w-8 text-muted-foreground/50 hover:text-white"
                         onClick={() => window.electronAPI.openFileOrFolder({ filePath: v.filePath, fallbackDir: playlist.path })}
                       >
-                        {exists ? <FileVideo className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+                        <FolderOpen className="h-4 w-4" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="text-xs">
