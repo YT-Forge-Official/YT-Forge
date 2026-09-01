@@ -469,7 +469,11 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-semibold truncate tracking-tight text-foreground">
+            <h2
+              className={`text-lg font-semibold truncate tracking-tight text-foreground${playlist.url ? ' cursor-pointer hover:underline' : ''}`}
+              onClick={playlist.url ? () => window.electronAPI.openExternalLink(playlist.url) : undefined}
+              title={playlist.title}
+            >
               {playlist.title}
             </h2>
             <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground min-w-0">
