@@ -100,7 +100,8 @@ const PlaylistView = () => {
   const [selectedVideos, setSelectedVideos] = useState(new Set(playlistDetails.videos.map(v => v.id)));
   const [globalQuality, setGlobalQuality] = useState('best');
   const [globalH264, setGlobalH264] = useState(false);
-  const [allowDuplicates, setAllowDuplicates] = useState(false);
+  // Overwrite is off by default — existing files get a " (n)" suffix instead
+  const [allowDuplicates, setAllowDuplicates] = useState(true);
   const [videoFormats, setVideoFormats] = useState({});     // id -> { isLoading, formats, audioSize }
   const [videoQualities, setVideoQualities] = useState({}); // id -> explicit user choice
   const [videoH264, setVideoH264] = useState({});           // id -> bool (individual override)
@@ -426,7 +427,7 @@ const PlaylistView = () => {
 
         {/* Items list */}
         <ScrollArea className="flex-1 -mx-2 px-2">
-          <div className="flex flex-col gap-2 py-3 pb-6">
+          <div className="flex flex-col gap-2.5 py-3.5 pb-6">
             {items.map((it) => {
               const isCurrent = currentItem?.id === it.id;
               const rowState = it.status;
@@ -475,24 +476,63 @@ const PlaylistView = () => {
                 </div>
               );
 
-              // Active item — column layout with a full-width progress panel,
-              // no reserved status column eating space on the right
+              // Active item — amber stays confined to the progress panel; the
+              // card itself keeps its normal "this one is running" treatment
               if (isCurrent) {
                 return (
-                  <div key={it.id} className="flex flex-col gap-2.5 p-3 rounded-xl border bg-primary/[0.04] border-primary/40 transition-all duration-200">
+                  <div key={it.id} className="flex flex-col gap-3 p-3 rounded-xl border bg-primary/[0.04] border-primary/40 transition-all duration-200">
+                    {/* Row 1 — thumbnail, title, skip */}
                     <div className="flex items-center gap-3.5">
                       {thumbnail}
                       {info}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => window.electronAPI.skipPlaylistItem({ jobId: boundJobId })}
+                        className="shrink-0 h-7 text-[11px] px-2.5 gap-1.5 text-muted-foreground hover:text-foreground"
+                      >
+                        <SkipForward className="h-3.5 w-3.5" />
+                        Skip
+                      </Button>
                     </div>
 
-                    <div className={`rounded-lg border px-3 py-2 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/30'}`}>
-                      <div className="flex justify-between items-center gap-3 mb-1.5 min-w-0">
-                        <span className={`text-[10px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
+                    {/* Row 2 — live stats, same language as the single-video view */}
+                    <div className="flex rounded-lg border border-border/30 bg-secondary/30 divide-x divide-border/30 overflow-hidden">
+                      {[
+                        {
+                          label: 'Speed',
+                          value: !isPaused && progress.speed > 0
+                            ? (stage === 'converting' ? `${progress.speed.toFixed(2)}x` : `${formatBytes(progress.speed)}/s`)
+                            : '--',
+                        },
+                        { label: 'Elapsed', value: formatTime(progress.elapsed) },
+                        {
+                          label: 'Time Left',
+                          value: !isPaused && progress.speed > 0 && progress.eta > 0
+                            ? formatTime(progress.eta)
+                            : '--:--',
+                        },
+                      ].map(stat => (
+                        <div key={stat.label} className="flex-1 px-2 py-1.5 flex flex-col items-center justify-center min-w-0">
+                          <span className="text-[9px] uppercase tracking-wider font-semibold text-muted-foreground mb-0.5">
+                            {stat.label}
+                          </span>
+                          <span className="text-xs font-mono tabular-nums font-medium text-foreground">
+                            {stat.value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Row 3 — stage + progress bar */}
+                    <div className={`rounded-lg border px-3 py-2.5 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/30'}`}>
+                      <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
+                        <span className={`text-[11px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
                           {isPaused
                             ? (pauseReason === 'network' ? 'Waiting for connection…' : 'Paused')
                             : (stage === 'converting' ? 'Converting to H.264…' : stage === 'merging' ? 'Merging…' : 'Downloading…')}
                         </span>
-                        <span className="text-[10px] font-mono tabular-nums tracking-tight text-muted-foreground whitespace-nowrap truncate min-w-0">
+                        <span className="text-[11px] font-mono tabular-nums tracking-tight text-muted-foreground whitespace-nowrap truncate min-w-0">
                           {progressText}
                         </span>
                       </div>
@@ -502,25 +542,6 @@ const PlaylistView = () => {
                         paused={isPaused}
                         className="h-1"
                       />
-                    </div>
-
-                    <div className="flex items-center justify-between -mt-1">
-                      <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-                        {!isPaused && progress.speed > 0
-                          ? (stage === 'converting' ? `${progress.speed.toFixed(2)}x` : `${formatBytes(progress.speed)}/s`)
-                          : ''}
-                        {!isPaused && progress.speed > 0 && progress.eta > 0 ? ' · ' : ''}
-                        {!isPaused && progress.eta > 0 ? `${formatTime(progress.eta)} left` : ''}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => window.electronAPI.skipPlaylistItem({ jobId: boundJobId })}
-                        className="h-6 text-[10px] px-2 gap-1 text-muted-foreground hover:text-foreground"
-                      >
-                        <SkipForward className="h-3 w-3" />
-                        Skip
-                      </Button>
                     </div>
                   </div>
                 );
@@ -774,32 +795,25 @@ const PlaylistView = () => {
                         </SelectContent>
                       </Select>
 
+                      {/* No tooltip here on purpose — the playlist-wide control
+                          in the header already explains what this does. */}
                       {showH264 && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <label
-                              htmlFor={`h264-${video.id}`}
-                              className={`flex items-center gap-1.5 justify-end pr-0.5 select-none transition-opacity
-                                ${globalH264 ? 'opacity-50' : 'cursor-pointer'}`}
-                            >
-                              <Checkbox
-                                id={`h264-${video.id}`}
-                                checked={globalH264 || !!videoH264[video.id]}
-                                disabled={globalH264}
-                                onCheckedChange={(val) => setVideoH264(prev => ({ ...prev, [video.id]: !!val }))}
-                                className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
-                              />
-                              <span className="text-[11px] text-muted-foreground leading-none whitespace-nowrap">
-                                Convert to H.264
-                              </span>
-                            </label>
-                          </TooltipTrigger>
-                          <TooltipContent side="left" className="text-xs max-w-56">
-                            {globalH264
-                              ? 'Controlled by the playlist-wide setting above.'
-                              : 'This quality is VP9/AV1 — convert on-device to H.264 for editing-software compatibility.'}
-                          </TooltipContent>
-                        </Tooltip>
+                        <label
+                          htmlFor={`h264-${video.id}`}
+                          className={`flex items-center gap-1.5 justify-end pr-0.5 select-none transition-opacity
+                            ${globalH264 ? 'opacity-50' : 'cursor-pointer'}`}
+                        >
+                          <Checkbox
+                            id={`h264-${video.id}`}
+                            checked={globalH264 || !!videoH264[video.id]}
+                            disabled={globalH264}
+                            onCheckedChange={(val) => setVideoH264(prev => ({ ...prev, [video.id]: !!val }))}
+                            className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+                          />
+                          <span className="text-[11px] text-muted-foreground leading-none whitespace-nowrap">
+                            Convert to H.264
+                          </span>
+                        </label>
                       )}
                     </>
                   )}

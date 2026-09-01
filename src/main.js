@@ -600,17 +600,44 @@ async function fetchVideoInfoWithRetry(url, silent) {
   return info;
 }
 
+// Short-lived, in-memory only. Bouncing between the playlist prompt, the
+// details view and back is common, and each miss costs a full yt-dlp launch.
+const VIDEO_INFO_TTL_MS = 10 * 60 * 1000;
+const VIDEO_INFO_MAX = 50;
+const videoInfoCache = new Map(); // videoId (or raw url) -> { t, payload }
+
+/** Stable cache key for a watch/shorts/youtu.be URL. */
+function videoKeyFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const v = u.searchParams.get('v');
+    if (v) return v;
+    if (u.hostname.endsWith('youtu.be')) return u.pathname.slice(1) || url;
+    const m = u.pathname.match(/\/shorts\/([^/?#]+)/);
+    if (m) return m[1];
+  } catch (e) { /* not a URL — fall through */ }
+  return url;
+}
+
 ipcMain.handle("get-video-info", async (event, url) => {
   if (isUpdatingYtDlp) {
     return { success: false, error: 'yt-dlp is updating in the background, please try again in a moment.' };
   }
+
+  const cacheKey = videoKeyFromUrl(url);
+  const cached = videoInfoCache.get(cacheKey);
+  if (cached && Date.now() - cached.t < VIDEO_INFO_TTL_MS) {
+    console.log('Serving video info from cache:', cacheKey);
+    return cached.payload;
+  }
+
   try {
     console.log('Fetching video info for:', url);
     const info = await fetchVideoInfoWithRetry(url, false);
     const { formats, audioSize } = extractFormats(info);
     console.log('Available qualities:', formats.map(f => f.quality).join(', '));
 
-    return {
+    const payload = {
       success: true,
       videoId: info.id,
       formats,
@@ -622,6 +649,15 @@ ipcMain.handle("get-video-info", async (event, url) => {
       audioSize,
       audioSizeFormatted: formatBytes(audioSize),
     };
+
+    if (videoInfoCache.size >= VIDEO_INFO_MAX) {
+      videoInfoCache.delete(videoInfoCache.keys().next().value);
+    }
+    videoInfoCache.set(cacheKey, { t: Date.now(), payload });
+    // The playlist view can reuse the derived formats for this video for free
+    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize });
+
+    return payload;
   } catch (error) {
     if (error.message === "AGE_RESTRICTED") {
       return { success: false, isAgeRestricted: true, error: "The content is age-restricted. Please sign in via Google." };
@@ -682,12 +718,22 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
 });
 
 // ---------------------------------------------------------------------------
-// Playlist format prefetching — parallel worker pool + in-memory cache.
+// Playlist format prefetching — staggered worker pool + persistent cache.
 // Results are streamed back per-video via 'playlist-format-result' events so
 // the UI fills in as fast as each video resolves instead of waiting in line.
+//
+// Sizing note: a yt-dlp launch pays several seconds of fixed, CPU-bound
+// startup before it extracts anything. Those startups do NOT overlap — running
+// six at once simply serialises them and pushes the FIRST result minutes out.
+// One process starts immediately on the head of the list; extra ones are added
+// only for long playlists, staggered so their startups don't collide.
 // ---------------------------------------------------------------------------
-const formatCache = new Map(); // videoId -> { success, formats, audioSize }
-const PREFETCH_PROCS = 6;      // parallel yt-dlp processes; each streams many videos
+const PREFETCH_MAX_PROCS = 3;
+const PREFETCH_VIDEOS_PER_PROC = 15; // only add a worker when it has real work
+const PREFETCH_STAGGER_MS = 7000;    // roughly one cold start apart
+
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
 let prefetchToken = 0;
 const prefetchProcs = new Set(); // live child processes, killed on cancel/restart
 
@@ -696,6 +742,77 @@ function killPrefetchProcs() {
     try { proc.kill('SIGTERM'); } catch (e) { }
   }
   prefetchProcs.clear();
+}
+
+// ── Format cache ────────────────────────────────────────────────────────────
+// Only derived metadata (heights, fps, codec flags, byte sizes) is stored —
+// no stream URLs — so entries stay valid for a long time and survive restarts.
+const FORMAT_CACHE_KEY = 'formatCacheV1';
+const FORMAT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// ~800 bytes/entry, and electron-store writes synchronously on the main
+// thread — 500 keeps each write well under half a megabyte.
+const FORMAT_CACHE_MAX = 500;
+// Longer than the gap between streamed results, so a whole playlist prefetch
+// collapses into a single write instead of one per video.
+const FORMAT_CACHE_SAVE_DEBOUNCE_MS = 5000;
+
+const formatCache = new Map(); // videoId -> { success, formats, audioSize, t }
+
+(function loadFormatCache() {
+  try {
+    const now = Date.now();
+    for (const [id, v] of Object.entries(store.get(FORMAT_CACHE_KEY, {}) || {})) {
+      if (v && v.t && Array.isArray(v.formats) && now - v.t < FORMAT_CACHE_TTL_MS) {
+        formatCache.set(id, v);
+      }
+    }
+    console.log(`Format cache: ${formatCache.size} entries restored`);
+  } catch (e) {
+    console.log('Format cache unreadable, starting fresh:', e.message);
+  }
+})();
+
+let formatCacheSaveTimer = null;
+let formatCacheDirty = false;
+
+function flushFormatCache() {
+  clearTimeout(formatCacheSaveTimer);
+  formatCacheSaveTimer = null;
+  if (!formatCacheDirty) return;
+  formatCacheDirty = false;
+  try {
+    let entries = [...formatCache.entries()];
+    if (entries.length > FORMAT_CACHE_MAX) {
+      entries.sort((a, b) => b[1].t - a[1].t);
+      entries = entries.slice(0, FORMAT_CACHE_MAX);
+      formatCache.clear();
+      for (const [k, v] of entries) formatCache.set(k, v);
+    }
+    store.set(FORMAT_CACHE_KEY, Object.fromEntries(entries));
+  } catch (e) {
+    // A cache write must never take the app down — worst case we re-fetch
+    console.log('Failed to persist format cache (non-critical):', e.message);
+  }
+}
+
+function persistFormatCache() {
+  formatCacheDirty = true;
+  clearTimeout(formatCacheSaveTimer);
+  formatCacheSaveTimer = setTimeout(flushFormatCache, FORMAT_CACHE_SAVE_DEBOUNCE_MS);
+}
+
+// Don't lose a prefetch that finished seconds before the user quit
+app.on('before-quit', flushFormatCache);
+
+function cacheFormats(id, result) {
+  formatCache.set(id, { ...result, t: Date.now() });
+  persistFormatCache();
+}
+
+/** Cached entry in the shape the renderer expects (no bookkeeping fields). */
+function cachedFormatResult(id) {
+  const { t, ...rest } = formatCache.get(id);
+  return rest;
 }
 
 /**
@@ -738,7 +855,7 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
           if (isBasicPlayerResponse(info.formats) && onBasicResponse) {
             onBasicResponse(id, info.webpage_url || `https://www.youtube.com/watch?v=${id}`);
           } else {
-            formatCache.set(id, result);
+            cacheFormats(id, result);
           }
           if (token === prefetchToken) safeSend('playlist-format-result', { id, ...result });
         } catch (e) { /* partial/non-JSON line — ignore */ }
@@ -767,47 +884,52 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
   killPrefetchProcs(); // a new prefetch supersedes any previous one
   if (!Array.isArray(videos) || videos.length === 0) return { done: true };
 
-  // Serve cached entries instantly
+  // Serve cached entries instantly — a revisited playlist needs no work at all
   const pending = [];
   for (const v of videos) {
     if (formatCache.has(v.id)) {
-      safeSend('playlist-format-result', { id: v.id, ...formatCache.get(v.id) });
+      safeSend('playlist-format-result', { id: v.id, ...cachedFormatResult(v.id) });
     } else {
       pending.push(v);
     }
   }
   if (pending.length === 0) return { done: true };
 
-  // Interleave assignment (proc i gets videos i, i+K, i+2K …) so the rows at
-  // the top of the list fill in first across all processes.
-  const nProcs = Math.min(PREFETCH_PROCS, pending.length);
-  const batches = Array.from({ length: nProcs }, () => []);
-  pending.forEach((v, i) => batches[i % nProcs].push(v));
+  const nProcs = Math.min(
+    PREFETCH_MAX_PROCS,
+    Math.max(1, Math.ceil(pending.length / PREFETCH_VIDEOS_PER_PROC))
+  );
+
+  // Contiguous split: the first process owns the head of the list, which is
+  // what the user is actually looking at while the rest streams in.
+  const per = Math.ceil(pending.length / nProcs);
+  const batches = Array.from({ length: nProcs }, (_, i) => pending.slice(i * per, (i + 1) * per))
+    .filter(b => b.length > 0);
 
   // Videos that returned a stripped player response get a targeted 2nd pass
   const basicOnes = [];
   const onBasicResponse = (id, url) => basicOnes.push({ id, url });
 
-  await Promise.all(batches.map(batch => streamFormatsBatch(batch, token, onBasicResponse)));
+  await Promise.all(batches.map(async (batch, i) => {
+    if (i > 0) {
+      await delay(i * PREFETCH_STAGGER_MS);
+      if (token !== prefetchToken) return;
+    }
+    return streamFormatsBatch(batch, token, onBasicResponse);
+  }));
 
-  // Second pass: retry stripped responses with an explicit player client
-  if (basicOnes.length > 0 && token === prefetchToken) {
-    let idx = 0;
-    const worker = async () => {
-      while (token === prefetchToken) {
-        const i = idx++;
-        if (i >= basicOnes.length) break;
-        const v = basicOnes[i];
-        try {
-          const info = await runYtDlpJson(v.url, ['--extractor-args', 'youtube:player_client=default,android'], true);
-          const { formats, audioSize } = extractFormats(info);
-          const result = { success: true, formats, audioSize };
-          formatCache.set(v.id, result);
-          if (token === prefetchToken) safeSend('playlist-format-result', { id: v.id, ...result });
-        } catch (e) { /* keep the basic result already sent */ }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(3, basicOnes.length) }, worker));
+  // Second pass: retry stripped responses with an explicit player client.
+  // Sequential — these are extra cold starts, and parallelising them only
+  // makes each one finish later.
+  for (const v of basicOnes) {
+    if (token !== prefetchToken) break;
+    try {
+      const info = await runYtDlpJson(v.url, ['--extractor-args', 'youtube:player_client=default,android'], true);
+      const { formats, audioSize } = extractFormats(info);
+      const result = { success: true, formats, audioSize };
+      cacheFormats(v.id, result);
+      if (token === prefetchToken) safeSend('playlist-format-result', { id: v.id, ...result });
+    } catch (e) { /* keep the basic result already sent */ }
   }
 
   return { done: true };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,34 @@ import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
   ArrowUpCircle, Loader2, LogOut, ListVideo, ArrowLeft, Clock,
   ArrowRight, Pause, Play, AlertTriangle, FileVideo,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
+
+// History entries shown per page. In-progress downloads live in their own
+// section and never count towards this — a playlist is a single entry.
+const HISTORY_PAGE_SIZE = 15;
+
+/**
+ * Page numbers to render, collapsing long runs into an ellipsis so the control
+ * never outgrows its row: 1 … prev current next … last
+ */
+const buildPageList = (current, total) => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+  const wanted = [1, total, current, current - 1, current + 1]
+    .filter(p => p >= 1 && p <= total)
+    .sort((a, b) => a - b);
+
+  const out = [];
+  let prev = 0;
+  for (const p of wanted) {
+    if (p === prev) continue;
+    if (prev && p - prev > 1) out.push(`gap-${prev}`);
+    out.push(p);
+    prev = p;
+  }
+  return out;
+};
 
 const GoogleIcon = (props) => (
   <svg viewBox="0 0 24 24" {...props}>
@@ -572,6 +599,70 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
   );
 };
 
+// ─── History pagination ───────────────────────────────────────────────────────
+const HistoryPagination = ({ page, totalPages, total, onChange }) => {
+  const from = (page - 1) * HISTORY_PAGE_SIZE + 1;
+  const to = Math.min(page * HISTORY_PAGE_SIZE, total);
+
+  const atStart = page <= 1;
+  const atEnd = page >= totalPages;
+
+  const arrowClass = (disabled) =>
+    `flex items-center justify-center h-7 w-7 rounded-md border border-border/40 transition-colors ${
+      disabled
+        ? 'text-muted-foreground/25 bg-transparent cursor-default'
+        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50 hover:border-border/70 cursor-pointer'
+    }`;
+
+  return (
+    <div className="flex-none flex items-center justify-between gap-3 pt-3 mt-1 border-t border-border/30">
+      <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+        {from}–{to} of {total}
+      </span>
+
+      <div className="flex items-center gap-1">
+        <button
+          className={arrowClass(atStart)}
+          onClick={() => !atStart && onChange(page - 1)}
+          disabled={atStart}
+          aria-label="Previous page"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </button>
+
+        {buildPageList(page, totalPages).map((p) =>
+          typeof p === 'number' ? (
+            <button
+              key={p}
+              onClick={() => p !== page && onChange(p)}
+              className={`h-7 min-w-7 px-1.5 rounded-md text-[11px] font-medium tabular-nums transition-colors ${
+                p === page
+                  ? 'bg-secondary/70 text-foreground border border-border/60 cursor-default'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40 border border-transparent cursor-pointer'
+              }`}
+            >
+              {p}
+            </button>
+          ) : (
+            <span key={p} className="h-7 w-5 flex items-end justify-center pb-1.5 text-[11px] text-muted-foreground/40 select-none">
+              …
+            </span>
+          )
+        )}
+
+        <button
+          className={arrowClass(atEnd)}
+          onClick={() => !atEnd && onChange(page + 1)}
+          disabled={atEnd}
+          aria-label="Next page"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ─── Main history view ────────────────────────────────────────────────────────
 const HistoryView = () => {
   const { history, setHistory, activeJobs } = useAppContext();
@@ -580,6 +671,27 @@ const HistoryView = () => {
   const [hasNewVersion, setHasNewVersion] = useState(false);
   const [versionChecked, setVersionChecked] = useState(false);
   const [selectedPlaylistHistory, setSelectedPlaylistHistory] = useState(null);
+  const [page, setPage] = useState(1);
+  const scrollRef = useRef(null);
+
+  // Pagination covers history entries only — active jobs sit in their own
+  // section above and never shift the page boundaries.
+  const totalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+
+  // Clearing or deleting entries can leave the current page out of range
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const pageItems = useMemo(
+    () => history.slice((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE),
+    [history, page]
+  );
+
+  const goToPage = (next) => {
+    setPage(next);
+    scrollRef.current?.scrollTo({ top: 0 });
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -666,7 +778,7 @@ const HistoryView = () => {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
         {/* ── Active downloads ── */}
         {activeJobs.length > 0 && (
           <div className="flex flex-col gap-2 mb-5 animate-in fade-in duration-200">
@@ -688,9 +800,9 @@ const HistoryView = () => {
         )}
 
         {/* ── History list ── */}
-        <div className="flex flex-col gap-2.5">
+        <div key={page} className="flex flex-col gap-2.5 animate-in fade-in duration-200">
           {history.length > 0 ? (
-            history.map((item, index) => (
+            pageItems.map((item, index) => (
               <div
                 key={`${item.timestamp}-${index}`}
                 className="group flex items-center gap-4 rounded-lg p-3 hover:bg-secondary/40 transition-colors min-w-0"
@@ -823,6 +935,15 @@ const HistoryView = () => {
           ) : null}
         </div>
       </div>
+
+      {history.length > 0 && (
+        <HistoryPagination
+          page={page}
+          totalPages={totalPages}
+          total={history.length}
+          onChange={goToPage}
+        />
+      )}
     </div>
   );
 };
