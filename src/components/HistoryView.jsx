@@ -126,8 +126,11 @@ const ActiveDownloadCard = ({ job }) => {
       {/* Thumbnail */}
       <div className="relative shrink-0 w-24 aspect-video rounded-lg overflow-hidden bg-secondary/30 border border-border/30">
         <img src={job.thumbnailUrl} className="w-full h-full object-cover" alt="" onError={thumbFallback} />
+        {/* Square corners on purpose: the parent's overflow-hidden clips this to
+            the exact inner curve. Giving it its own radius makes it miss by the
+            border width and leaks the thumbnail at the corners. */}
         {isPlaylist && (
-          <div className="absolute right-0 inset-y-0 w-[34%] bg-black/75 rounded-r-lg flex flex-col items-center justify-center gap-0.5">
+          <div className="absolute right-0 inset-y-0 w-[34%] bg-black/75 flex flex-col items-center justify-center gap-0.5">
             <ListVideo className="h-3.5 w-3.5 text-white/90" />
             <span className="text-[9px] font-bold text-white/90 leading-none">{items.length}</span>
           </div>
@@ -819,7 +822,7 @@ const HistoryView = () => {
                     onError={thumbFallback}
                   />
                   {item.type === 'playlist' && (
-                    <div className="absolute right-0 inset-y-0 w-[34%] bg-black/75 rounded-r-md flex flex-col items-center justify-center gap-0.5 transition-colors group-hover:bg-black/85">
+                    <div className="absolute right-0 inset-y-0 w-[34%] bg-black/75 flex flex-col items-center justify-center gap-0.5 transition-colors group-hover:bg-black/85">
                       <ListVideo className="h-3.5 w-3.5 text-white/90" />
                       <span className="text-[10px] font-bold text-white/90 leading-none tabular-nums">
                         {item.downloadedVideos?.length}

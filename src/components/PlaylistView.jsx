@@ -148,7 +148,10 @@ const PlaylistView = () => {
     if (globalQuality === 'best' || globalQuality === 'custom' || !fmts?.length) return 'best';
     const cap = parseInt(globalQuality);
     const match = fmts.find(f => f.height <= cap); // fmts sorted best-first
-    return match ? String(match.itag) : 'best';
+    // Nothing at or below the cap (e.g. capping at 360p on a video that only
+    // offers 720p+). Fall back to the SMALLEST format available, not "best" —
+    // asking for a low cap should never hand back the largest file.
+    return String((match || fmts[fmts.length - 1]).itag);
   }, [videoQualities, globalQuality, videoFormats]);
 
   const resolveFormat = useCallback((videoId) => {
@@ -616,6 +619,9 @@ const PlaylistView = () => {
                 <SelectItem value="1440" className="text-xs">2K (1440p)</SelectItem>
                 <SelectItem value="1080" className="text-xs">1080p</SelectItem>
                 <SelectItem value="720" className="text-xs">720p</SelectItem>
+                <SelectItem value="480" className="text-xs">480p</SelectItem>
+                <SelectItem value="360" className="text-xs">360p</SelectItem>
+                <SelectItem value="240" className="text-xs">240p</SelectItem>
                 <SelectItem value="audio" className="text-xs">Audio only (MP3)</SelectItem>
               </SelectContent>
             </Select>
