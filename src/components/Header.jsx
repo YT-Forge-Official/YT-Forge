@@ -3,7 +3,9 @@ import { useAppContext } from '../contexts/AppContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Loader2, Search, Github, ArrowDownToLine } from 'lucide-react';
+import { Loader2, Search, Coffee, ArrowDownToLine } from 'lucide-react';
+
+const KOFI_URL = 'https://ko-fi.com/D3Z1266RDI';
 
 const Header = () => {
   const { url, handleUrlChange, handleFetchDetails, isLoading, activeJobs, isDownloading, goBackToHistory } = useAppContext();
@@ -60,19 +62,20 @@ const Header = () => {
         </TooltipContent>
       </Tooltip>
 
+      {/* Ko-fi — warms to gold on hover, the one bit of colour up here */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge')}
+            className="kofi-affordance h-10 w-10 shrink-0 text-muted-foreground"
+            onClick={() => window.electronAPI.openExternalLink(KOFI_URL)}
           >
-            <Github className="h-4 w-4" />
+            <Coffee className="h-4 w-4" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-xs">
-          Support this project ❤️
+          Buy me a coffee
         </TooltipContent>
       </Tooltip>
     </header>

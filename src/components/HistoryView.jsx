@@ -20,7 +20,7 @@ import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
   ArrowUpCircle, Loader2, LogOut, ListVideo, ArrowLeft, Clock,
   ArrowRight, Pause, Play, AlertTriangle, FileVideo,
-  ChevronLeft, ChevronRight, Sun, Moon,
+  ChevronLeft, ChevronRight, Sun, Moon, Github,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { useTheme } from '../contexts/ThemeContext';
@@ -435,15 +435,32 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
 
         {/* Footer */}
         <div className="px-5 py-4 bg-muted/20 border-t border-border/30 flex items-center justify-between gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2"
-            onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            View releases on GitHub
-          </Button>
+          <div className="flex items-center gap-0.5 min-w-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2"
+              onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              View releases on GitHub
+            </Button>
+            {/* <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-muted-foreground/70 hover:text-foreground"
+                  onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge')}
+                >
+                  <Github className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                Support this project ❤️
+              </TooltipContent>
+            </Tooltip> */}
+          </div>
           <AlertDialogCancel className="h-8 px-4 text-xs m-0">
             Close
           </AlertDialogCancel>
