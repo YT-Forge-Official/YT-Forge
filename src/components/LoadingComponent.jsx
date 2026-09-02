@@ -30,7 +30,7 @@ const LoadingComponent = ({ onCancel, ytDlpStatus, pendingFetch, isPlaylistMode 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4">
       <Loader2
-        className={`h-8 w-8 animate-spin transition-colors duration-700 ${showUpdateStage && ytDlpStatus !== 'updated' && ytDlpStatus !== 'up-to-date' ? 'text-yellow-400' : 'text-muted-foreground'
+        className={`h-8 w-8 animate-spin transition-colors duration-700 ${showUpdateStage && ytDlpStatus !== 'updated' && ytDlpStatus !== 'up-to-date' ? 'text-amber-500 dark:text-yellow-400' : 'text-muted-foreground'
           }`}
       />
 

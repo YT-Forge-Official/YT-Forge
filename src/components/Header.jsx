@@ -39,7 +39,7 @@ const Header = () => {
           <Button
             variant="ghost"
             size="icon"
-            className="relative h-10 w-10 shrink-0 text-muted-foreground hover:text-white transition-colors"
+            className="relative h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
             onClick={goBackToHistory}
           >
             <ArrowDownToLine className="h-4 w-4" />
@@ -65,8 +65,8 @@ const Header = () => {
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-white transition-colors"
-            onClick={() => window.electronAPI.openExternalLink('https://github.com/Shaikh-Suja-Rahaman/YT-Forge')}
+            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge')}
           >
             <Github className="h-4 w-4" />
           </Button>

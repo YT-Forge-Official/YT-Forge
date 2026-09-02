@@ -63,13 +63,13 @@ Unlike many downloaders, YT-FORGE prioritizes **H.264 video and AAC audio** form
 
 | OS | Hardware / Architecture | Direct Download (v1.0.8) |
 |--------|---------------------|--------------------------|
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | [Download .dmg](https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8-arm64.dmg) |
-| **Windows** | Intel / AMD & Snapdragon (ARM) | [Download .exe](https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/download/v1.0.8/YT-FORGE-Setup-1.0.8.exe) |
-| **Linux** | Intel / AMD (Standard PCs) | [Download .AppImage](https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8.AppImage) |
-| **Linux** | ARM Devices (Raspberry Pi, etc.)| [Download ARM .AppImage](https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8-arm64.AppImage) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | [Download .dmg](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8-arm64.dmg) |
+| **Windows** | Intel / AMD & Snapdragon (ARM) | [Download .exe](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v1.0.8/YT-FORGE-Setup-1.0.8.exe) |
+| **Linux** | Intel / AMD (Standard PCs) | [Download .AppImage](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8.AppImage) |
+| **Linux** | ARM Devices (Raspberry Pi, etc.)| [Download ARM .AppImage](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v1.0.8/YT-FORGE-1.0.8-arm64.AppImage) |
 
 **Latest release:**  
-https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/latest
+https://github.com/YT-Forge-Official/YT-Forge/releases/latest
 
 ---
 

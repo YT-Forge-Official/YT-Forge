@@ -1,38 +1,135 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * ShadCN dark theme — zinc-based palette
- * Applied globally (always dark, no toggle needed)
+ * ─── Theming ────────────────────────────────────────────────────────────────
+ * Two palettes, one contract. Every semantic token is declared twice — once
+ * on :root (light) and once on .dark (dark) — and the Tailwind theme below
+ * only ever references the token, never a literal colour. Swapping the `dark`
+ * class on <html> therefore re-themes the whole app with zero re-render.
+ *
+ * Light mode is built the same way the dark one is: a near-neutral zinc ramp,
+ * an off-white page with pure-white cards so surfaces separate without a
+ * single hard line, and borders soft enough that the heavy `/30`–`/50` alphas
+ * used across the UI still read as hairlines instead of disappearing.
+ */
+
+:root {
+  color-scheme: light;
+
+  --background: oklch(0.98 0 0);          /* off-white page */
+  --foreground: oklch(0.185 0 0);         /* near-black text, never pure #000 */
+
+  --card: oklch(1 0 0);                   /* white surfaces lift off the page */
+  --card-foreground: oklch(0.185 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.185 0 0);
+
+  --primary: oklch(0.21 0 0);             /* inverse of dark mode: ink on paper */
+  --primary-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.875 0 0);          /* tuned so bg-secondary/20–50 stays subtle */
+  --secondary-foreground: oklch(0.21 0 0);
+  --muted: oklch(0.875 0 0);
+  --muted-foreground: oklch(0.505 0 0);   /* ~4.9:1 on the page background */
+  --accent: oklch(0.945 0 0);             /* hover wash */
+  --accent-foreground: oklch(0.21 0 0);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  --border: oklch(0.865 0 0);
+  --input: oklch(0.885 0 0);
+  --ring: oklch(0.62 0 0);
+
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+
+  /* Chrome that lives outside the token set */
+  --scrollbar-thumb: oklch(0.8 0 0);
+  --scrollbar-thumb-hover: oklch(0.68 0 0);
+  --progress-paused-track: oklch(0.75 0.11 75 / 0.28);
+
+  --radius: 0.625rem;
+}
+
+/*
+ * ShadCN dark theme — zinc-based palette (unchanged, this is the original app
+ * look; light mode was layered around it rather than on top of it).
+ */
+.dark {
+  color-scheme: dark;
+
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+
+  --card: oklch(0.17 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.17 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.92 0.04 25);
+
+  --border: oklch(0.274 0 0);
+  --input: oklch(0.274 0 0);
+  --ring: oklch(0.556 0 0);
+
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+
+  --scrollbar-thumb: oklch(0.4 0 0);
+  --scrollbar-thumb-hover: oklch(0.5 0 0);
+  --progress-paused-track: oklch(0.45 0.11 75 / 0.2);
+}
+
+/*
+ * `inline` keeps the utilities pointing at the variables above instead of
+ * copying their values — that indirection is what makes runtime switching work.
  */
 @theme inline {
-  --color-background: oklch(0.145 0 0);
-  --color-foreground: oklch(0.985 0 0);
-  --color-card: oklch(0.17 0 0);
-  --color-card-foreground: oklch(0.985 0 0);
-  --color-popover: oklch(0.17 0 0);
-  --color-popover-foreground: oklch(0.985 0 0);
-  --color-primary: oklch(0.985 0 0);
-  --color-primary-foreground: oklch(0.205 0 0);
-  --color-secondary: oklch(0.269 0 0);
-  --color-secondary-foreground: oklch(0.985 0 0);
-  --color-muted: oklch(0.269 0 0);
-  --color-muted-foreground: oklch(0.708 0 0);
-  --color-accent: oklch(0.269 0 0);
-  --color-accent-foreground: oklch(0.985 0 0);
-  --color-destructive: oklch(0.396 0.141 25.723);
-  --color-destructive-foreground: oklch(0.92 0.04 25);
-  --color-border: oklch(0.274 0 0);
-  --color-input: oklch(0.274 0 0);
-  --color-ring: oklch(0.556 0 0);
-  --radius: 0.625rem;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 
-  --color-chart-1: oklch(0.488 0.243 264.376);
-  --color-chart-2: oklch(0.696 0.17 162.48);
-  --color-chart-3: oklch(0.769 0.188 70.08);
-  --color-chart-4: oklch(0.627 0.265 303.9);
-  --color-chart-5: oklch(0.645 0.246 16.439);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
 
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
@@ -40,20 +137,20 @@
 
 /* --- Global Reset & Base --- */
 
-.root {
-  background-color: black;
-}
-
 @layer base {
   * {
-    border-color: var(--color-border);
+    border-color: var(--border);
+  }
+
+  html {
+    background-color: var(--background);
   }
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
       system-ui, sans-serif;
-    background-color: var(--color-background);
-    color: var(--color-foreground);
+    background-color: var(--background);
+    color: var(--foreground);
     overflow: hidden;
     width: 100vw;
     height: 100vh;
@@ -69,7 +166,7 @@
     flex-direction: column;
   }
 
-  /* Thin, subtle scrollbars */
+  /* Thin, subtle scrollbars — thumb follows the active theme */
   *::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -80,13 +177,46 @@
   }
 
   *::-webkit-scrollbar-thumb {
-    background: oklch(0.4 0 0);
+    background: var(--scrollbar-thumb);
     border-radius: 3px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: oklch(0.5 0 0);
+    background: var(--scrollbar-thumb-hover);
   }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/*
+ * Theme cross-fade. The class is added to <html> for the length of a switch
+ * only, so nothing pays for these transitions during normal interaction.
+ * Declared outside @layer on purpose: unlayered rules win over Tailwind's
+ * `transition-colors` utilities without needing !important.
+ */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: background-color 220ms ease, border-color 220ms ease,
+    color 220ms ease, fill 220ms ease, stroke 220ms ease,
+    box-shadow 220ms ease;
+}
+
+/*
+ * …but the control doing the switching is itself mid-animation. The rule above
+ * would replace its `transition` shorthand right as it moves, so it needs its
+ * own (higher specificity) declaration. Tailwind v4 animates movement through
+ * the individual `translate` / `rotate` / `scale` properties rather than
+ * `transform`, so all four have to be named here or the knob snaps.
+ */
+.theme-transition [data-theme-motion] {
+  transition: translate 300ms cubic-bezier(0.34, 1.3, 0.64, 1),
+    transform 300ms cubic-bezier(0.34, 1.3, 0.64, 1), rotate 300ms ease,
+    scale 300ms ease, opacity 300ms ease, background-color 220ms ease,
+    border-color 220ms ease, color 220ms ease, box-shadow 220ms ease;
 }
 
 /* --- Progress bar indeterminate animation --- */
@@ -106,7 +236,7 @@
 
 /* Paused state — amber bar with subtle pulse */
 .progress-paused {
-  background: oklch(0.45 0.11 75 / 0.2);
+  background: var(--progress-paused-track);
 }
 
 @keyframes progressPausedPulse {

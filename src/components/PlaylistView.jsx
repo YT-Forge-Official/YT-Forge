@@ -374,11 +374,11 @@ const PlaylistView = () => {
               return (
                 <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${ok ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-border/40 bg-secondary/20'}`}>
                   {ok ? (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                   ) : (
                     <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
                   )}
-                  <span className={`text-[13px] flex-1 ${ok ? 'text-emerald-300/90' : 'text-muted-foreground'}`}>
+                  <span className={`text-[13px] flex-1 ${ok ? 'text-emerald-700 dark:text-emerald-300/90' : 'text-muted-foreground'}`}>
                     {wasCancelled
                       ? nDone > 0
                         ? `Cancelled — ${nDone} completed ${nDone === 1 ? 'video was' : 'videos were'} kept`
@@ -391,7 +391,7 @@ const PlaylistView = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-7 text-xs gap-1.5 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300"
+                      className="h-7 text-xs gap-1.5 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300"
                       onClick={() => window.electronAPI.openFileOrFolder({ filePath: null, fallbackDir: boundResult.path })}
                     >
                       <FolderOpen className="h-3.5 w-3.5" />
@@ -414,7 +414,7 @@ const PlaylistView = () => {
           ) : (
             <div className={`rounded-xl border px-4 py-3 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/20'}`}>
               <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
-                <span className={`text-xs font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
+                <span className={`text-xs font-medium whitespace-nowrap ${isPaused ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
                   {isPaused
                     ? (pauseReason === 'network' ? 'Waiting for connection…' : 'Paused')
                     : `Downloading ${Math.min(doneCount + 1, items.length)} of ${items.length}`}
@@ -443,7 +443,7 @@ const PlaylistView = () => {
                   </div>
                   {rowState === 'completed' && (
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center group-hover:opacity-0 transition-opacity">
-                      <CheckCircle2 className="h-5 w-5 text-emerald-400 drop-shadow-md" />
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500 dark:text-emerald-400 drop-shadow-md" />
                     </div>
                   )}
                   <button
@@ -530,7 +530,7 @@ const PlaylistView = () => {
                     {/* Row 3 — stage + progress bar */}
                     <div className={`rounded-lg border px-3 py-2.5 ${isPaused ? 'border-amber-500/20 bg-amber-500/5' : 'border-border/30 bg-secondary/30'}`}>
                       <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
-                        <span className={`text-[11px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'}`}>
+                        <span className={`text-[11px] font-medium whitespace-nowrap ${isPaused ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
                           {isPaused
                             ? (pauseReason === 'network' ? 'Waiting for connection…' : 'Paused')
                             : (stage === 'converting' ? 'Converting to H.264…' : stage === 'merging' ? 'Merging…' : 'Downloading…')}

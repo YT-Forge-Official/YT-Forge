@@ -275,13 +275,13 @@ const DetailsView = () => {
             {isVP9 && !isBusy && (
               <div className="flex flex-col gap-3 p-3 rounded-lg border border-border/40 bg-secondary/20">
                 <div className="flex items-start gap-2.5">
-                  <Info className="h-4 w-4 text-amber-500/70 mt-0.5 shrink-0" />
+                  <Info className="h-4 w-4 text-amber-600 dark:text-amber-500/70 mt-0.5 shrink-0" />
                   <div className="flex flex-col gap-1">
                     <p className="text-xs text-foreground/90 font-medium">
                       Compatibility Warning
                     </p>
                     <p className="text-[11px] leading-snug text-muted-foreground mr-2">
-                      VP9 / AV1 may not be supported by some editors <span className="text-amber-500/50">(Premiere Pro, Final Cut)</span> and older players.
+                      VP9 / AV1 may not be supported by some editors <span className="text-amber-600/70 dark:text-amber-500/50">(Premiere Pro, Final Cut)</span> and older players.
                     </p>
                   </div>
                 </div>
@@ -409,8 +409,8 @@ const DetailsView = () => {
                 {/* Network-paused info badge */}
                 {isPaused && pauseReason === 'network' && (
                   <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-amber-500/5 border border-amber-500/15">
-                    <WifiOff className="h-3 w-3 text-amber-500/70 shrink-0" />
-                    <p className="text-[11px] leading-snug text-amber-500/70">
+                    <WifiOff className="h-3 w-3 text-amber-600 dark:text-amber-500/70 shrink-0" />
+                    <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-500/70">
                       No internet — will resume automatically
                     </p>
                   </div>
@@ -419,7 +419,7 @@ const DetailsView = () => {
             ) : result?.success ? (
               <Button
                 variant="outline"
-                className="w-full gap-2 h-9 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300"
+                className="w-full gap-2 h-9 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300"
                 onClick={() => window.electronAPI.openFileLocation(result.path)}
               >
                 <CheckCircle2 className="h-4 w-4" />
@@ -477,7 +477,7 @@ const DetailsView = () => {
                 : 'border-border/30 bg-secondary/30'
                 }`}>
                 <div className="flex justify-between items-center gap-3 mb-2 min-w-0">
-                  <span className={`text-xs font-medium whitespace-nowrap ${isPaused ? 'text-amber-400' : 'text-foreground'
+                  <span className={`text-xs font-medium whitespace-nowrap ${isPaused ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'
                     }`}>
                     {isPaused
                       ? pauseReason === 'network'

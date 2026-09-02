@@ -45,5 +45,5 @@ linux:
 
 publish:
   provider: github
-  owner: Shaikh-Suja-Rahaman
+  owner: YT-Forge-Official
   repo: YT-Forge

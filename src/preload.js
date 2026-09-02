@@ -58,4 +58,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // App version
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+
+  // Appearance — read synchronously at preload time so the renderer can paint
+  // the right theme on its very first frame (no flash on startup).
+  initialAppearance: ipcRenderer.sendSync("get-appearance-sync"),
+  getAppearance: () => ipcRenderer.invoke("get-appearance"),
+  setAppearance: (preference) => ipcRenderer.invoke("set-appearance", preference),
+  onAppearanceChanged: subscribe("appearance-changed"),
 });

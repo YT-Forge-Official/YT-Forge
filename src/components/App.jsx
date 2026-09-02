@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { AppProvider, useAppContext } from '../contexts/AppContext';
+import { ThemeProvider } from '../contexts/ThemeContext';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Card, CardContent } from '@/components/ui/card';
 import Header from './Header';
@@ -23,7 +24,7 @@ const GoogleIcon = (props) => (
 const Kbd = ({ children, className = '' }) => (
   <kbd
     className={`inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-[5px] border border-border/60 bg-background/80
-      font-sans text-[10px] font-semibold leading-none text-muted-foreground/80 shadow-[0_1px_0_0_rgba(0,0,0,0.4)] ${className}`}
+      font-sans text-[10px] font-semibold leading-none text-muted-foreground/80 shadow-[0_1px_0_0_rgba(0,0,0,0.06)] dark:shadow-[0_1px_0_0_rgba(0,0,0,0.4)] ${className}`}
   >
     {children}
   </kbd>
@@ -86,7 +87,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
 
   return (
     <div className="flex items-center justify-center h-full animate-in fade-in zoom-in-95 duration-200">
-      <div className="w-full max-w-[520px] rounded-2xl border border-border/50 bg-secondary/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04),0_16px_40px_-24px_rgba(0,0,0,0.9)] overflow-hidden">
+      <div className="w-full max-w-[520px] rounded-2xl border border-border/50 bg-secondary/[0.12] shadow-[0_16px_40px_-28px_rgba(0,0,0,0.22)] dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04),0_16px_40px_-24px_rgba(0,0,0,0.9)] overflow-hidden">
         {/* Heading */}
         <div className="flex items-start gap-3.5 px-5 pt-5 pb-4">
           <div className="flex items-center justify-center h-9 w-9 rounded-xl bg-background/70 border border-border/50 shrink-0">
@@ -219,7 +220,7 @@ const AppContent = () => {
                 variant="default"
                 onClick={handleLogin}
                 disabled={isLoggingIn}
-                className="w-full mt-2 h-10 bg-white text-black hover:bg-white/90 shadow-md hover:shadow-lg transition-all"
+                className="w-full mt-2 h-10 bg-white text-neutral-900 border border-black/10 hover:bg-neutral-50 dark:border-transparent dark:hover:bg-white/90 shadow-md hover:shadow-lg transition-all"
               >
                 {isLoggingIn ? (
                   <Loader2 className="h-5 w-5 animate-spin mr-2" />
@@ -284,11 +285,13 @@ const AppContent = () => {
 
 function App() {
   return (
-    <AppProvider>
-      <TooltipProvider delayDuration={0}>
-        <AppContent />
-      </TooltipProvider>
-    </AppProvider>
+    <ThemeProvider>
+      <AppProvider>
+        <TooltipProvider delayDuration={0}>
+          <AppContent />
+        </TooltipProvider>
+      </AppProvider>
+    </ThemeProvider>
   );
 }
 

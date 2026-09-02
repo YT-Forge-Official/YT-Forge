@@ -20,8 +20,10 @@ import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
   ArrowUpCircle, Loader2, LogOut, ListVideo, ArrowLeft, Clock,
   ArrowRight, Pause, Play, AlertTriangle, FileVideo,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Sun, Moon,
 } from 'lucide-react';
+import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { useTheme } from '../contexts/ThemeContext';
 
 // History entries shown per page. In-progress downloads live in their own
 // section and never count towards this — a playlist is a single entry.
@@ -146,11 +148,11 @@ const ActiveDownloadCard = ({ job }) => {
           {job.status === 'queued' ? (
             <Clock className="h-3 w-3 text-muted-foreground/60 shrink-0" />
           ) : isPaused ? (
-            <Pause className="h-3 w-3 text-amber-400/80 shrink-0" />
+            <Pause className="h-3 w-3 text-amber-600 dark:text-amber-400/80 shrink-0" />
           ) : (
             <Loader2 className="h-3 w-3 text-primary/70 shrink-0 animate-spin" />
           )}
-          <span className={`text-[11px] truncate font-medium ${isPaused ? 'text-amber-400/90' : 'text-muted-foreground'}`}>
+          <span className={`text-[11px] truncate font-medium ${isPaused ? 'text-amber-600 dark:text-amber-400/90' : 'text-muted-foreground'}`}>
             {statusLine}
           </span>
         </div>
@@ -237,6 +239,36 @@ const ActiveDownloadCard = ({ job }) => {
   );
 };
 
+// ─── Appearance setting ───────────────────────────────────────────────────────
+const AppearanceSection = () => {
+  const { isDark } = useTheme();
+
+  return (
+    <section className="space-y-2.5">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">Appearance</h3>
+      <div className="flex items-center gap-3.5 rounded-xl px-4 py-3.5 border border-border/40 bg-secondary/25">
+        <div className="relative flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border/50 shrink-0">
+          <Sun
+            className={`absolute w-4.5 h-4.5 text-amber-500 transition-all duration-300 ${isDark ? 'opacity-0 scale-50 rotate-90' : 'opacity-100 scale-100 rotate-0'}`}
+            strokeWidth={1.9}
+          />
+          <Moon
+            className={`absolute w-4.5 h-4.5 text-indigo-300 transition-all duration-300 ${isDark ? 'opacity-100 scale-100 rotate-0' : 'opacity-0 scale-50 -rotate-90'}`}
+            strokeWidth={1.9}
+          />
+        </div>
+        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+          <span className="text-sm font-medium text-foreground">{isDark ? 'Dark' : 'Light'} mode</span>
+          <span className="text-xs text-muted-foreground">
+            {isDark ? 'Easy on the eyes at night.' : 'Bright, clean and high contrast.'}
+          </span>
+        </div>
+        <ThemeToggle />
+      </div>
+    </section>
+  );
+};
+
 // ─── Settings dialog ──────────────────────────────────────────────────────────
 const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionChecked }) => {
   const { isAuthenticated, authExpired, loginYoutube, logoutYoutube, refreshAuth } = useAppContext();
@@ -256,7 +288,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
             <Button
               variant="ghost"
               size="sm"
-              className="relative text-muted-foreground hover:text-white gap-1.5 h-7 text-xs"
+              className="relative text-muted-foreground hover:text-foreground gap-1.5 h-7 text-xs"
             >
               <Settings className="h-3 w-3" />
               Settings
@@ -289,6 +321,8 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
           </div>
 
           <div className="space-y-6">
+            <AppearanceSection />
+
             {/* Updates */}
             <section className="space-y-2.5">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">App Updates</h3>
@@ -305,7 +339,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
                     <Button
                       size="sm"
                       className="h-8 text-xs px-3 shrink-0"
-                      onClick={() => window.electronAPI.openExternalLink('https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/latest')}
+                      onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
                     >
                       Get Update
                     </Button>
@@ -384,7 +418,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
                     size="sm"
                     onClick={handleLogin}
                     disabled={isLoggingIn}
-                    className="w-full h-9 bg-white text-black hover:bg-white/90 shadow-sm transition-all"
+                    className="w-full h-9 bg-white text-neutral-900 border border-black/10 hover:bg-neutral-50 dark:border-transparent dark:hover:bg-white/90 shadow-sm transition-all"
                   >
                     {isLoggingIn ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -405,7 +439,7 @@ const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionCheck
             variant="ghost"
             size="sm"
             className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2"
-            onClick={() => window.electronAPI.openExternalLink('https://github.com/Shaikh-Suja-Rahaman/YT-Forge/releases/latest')}
+            onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
           >
             <ExternalLink className="h-3.5 w-3.5" />
             View releases on GitHub
@@ -542,7 +576,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                   </p>
                   <div className="flex items-center gap-1.5 min-w-0">
                     {exists === false && v.filePath ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-500/70 font-medium shrink-0">
+                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-500/70 font-medium shrink-0">
                         <AlertTriangle className="h-2.5 w-2.5" />
                         File moved or deleted
                       </span>
@@ -559,7 +593,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-muted-foreground/50 hover:text-white"
+                        className="h-8 w-8 text-muted-foreground/50 hover:text-foreground"
                         onClick={() => window.electronAPI.openFileOrFolder({ filePath: v.filePath, fallbackDir: playlist.path })}
                       >
                         <FolderOpen className="h-4 w-4" />
@@ -574,7 +608,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <AlertDialogTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground/50 hover:text-white">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground/50 hover:text-foreground">
                             <X className="h-4 w-4" />
                           </Button>
                         </AlertDialogTrigger>
@@ -705,7 +739,7 @@ const HistoryView = () => {
     window.electronAPI.getAppVersion().then(v => {
       if (!mounted) return;
       setAppVersion(v);
-      fetch('https://api.github.com/repos/Shaikh-Suja-Rahaman/YT-Forge/releases/latest')
+      fetch('https://api.github.com/repos/YT-Forge-Official/YT-Forge/releases/latest')
         .then(res => res.json())
         .then(data => {
           if (!mounted || !data?.tag_name) return;
@@ -760,7 +794,7 @@ const HistoryView = () => {
           {history.length > 0 && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-white gap-1.5 h-7 text-xs">
+                <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground gap-1.5 h-7 text-xs">
                   <Trash2 className="h-3 w-3" />
                   Clear
                 </Button>
@@ -865,7 +899,7 @@ const HistoryView = () => {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground/50 hover:text-white"
+                          className="h-8 w-8 text-muted-foreground/50 hover:text-foreground"
                           onClick={() => setSelectedPlaylistHistory(item)}
                         >
                           <ArrowRight className="h-4 w-4" />
@@ -880,7 +914,7 @@ const HistoryView = () => {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-muted-foreground/50 hover:text-white"
+                        className="h-8 w-8 text-muted-foreground/50 hover:text-foreground"
                         onClick={() => {
                           if (item.type === 'playlist') {
                             window.electronAPI.openFileOrFolder({ filePath: null, fallbackDir: item.path });
@@ -904,7 +938,7 @@ const HistoryView = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-muted-foreground/50 hover:text-white"
+                            className="h-8 w-8 text-muted-foreground/50 hover:text-foreground"
                           >
                             <X className="h-4 w-4" />
                           </Button>

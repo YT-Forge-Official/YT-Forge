@@ -1,5 +1,5 @@
 "use strict";
-const { app, BrowserWindow, ipcMain, dialog, shell, net, session } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
@@ -165,7 +165,43 @@ function updateYtDlp() {
   });
 }
 ipcMain.handle("get-ytdlp-status", () => ytDlpPhase);
+const THEME_KEY = "appearance";
+const THEME_PREFERENCES = ["system", "light", "dark"];
+const WINDOW_BG = { dark: "#0a0a0a", light: "#f9f9f9" };
+const getThemePreference = () => {
+  const stored = store.get(THEME_KEY);
+  return THEME_PREFERENCES.includes(stored) ? stored : "system";
+};
+const getAppearance = () => {
+  const preference = getThemePreference();
+  const resolved = preference === "system" ? nativeTheme.shouldUseDarkColors ? "dark" : "light" : preference;
+  return { preference, resolved };
+};
+const applyWindowBackground = (resolved) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(WINDOW_BG[resolved]);
+  }
+};
+ipcMain.on("get-appearance-sync", (event) => {
+  event.returnValue = getAppearance();
+});
+ipcMain.handle("get-appearance", () => getAppearance());
+ipcMain.handle("set-appearance", (event, preference) => {
+  const next = THEME_PREFERENCES.includes(preference) ? preference : "system";
+  store.set(THEME_KEY, next);
+  nativeTheme.themeSource = next;
+  const appearance = getAppearance();
+  applyWindowBackground(appearance.resolved);
+  return appearance;
+});
+nativeTheme.on("updated", () => {
+  const appearance = getAppearance();
+  applyWindowBackground(appearance.resolved);
+  safeSend("appearance-changed", appearance);
+});
 function createWindow() {
+  nativeTheme.themeSource = getThemePreference();
+  const { resolved } = getAppearance();
   mainWindow = new BrowserWindow({
     width: 800,
     height: 700,
@@ -173,6 +209,7 @@ function createWindow() {
     minHeight: 560,
     resizable: true,
     autoHideMenuBar: true,
+    backgroundColor: WINDOW_BG[resolved],
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
