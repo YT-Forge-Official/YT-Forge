@@ -3,6 +3,7 @@ import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Kbd } from '@/components/ui/kbd';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -204,6 +205,7 @@ const DetailsView = () => {
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Back
+        <Kbd className="ml-0.5">esc</Kbd>
       </Button>
 
       {/* Two-Column Layout */}

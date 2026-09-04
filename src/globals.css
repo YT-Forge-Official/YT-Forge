@@ -32,7 +32,11 @@
   --secondary: oklch(0.875 0 0);          /* tuned so bg-secondary/20–50 stays subtle */
   --secondary-foreground: oklch(0.21 0 0);
   --muted: oklch(0.875 0 0);
-  --muted-foreground: oklch(0.505 0 0);   /* ~4.9:1 on the page background */
+  --muted-foreground: oklch(0.46 0 0);    /* 6.7:1 on page, 6.2:1 on a secondary/25 row */
+  /* Third text tier. Alpha-fading --muted-foreground was what made light mode
+     hard to read: /70 lands at 3.3:1, well under the 4.5:1 AA floor. This is a
+     solid colour instead, so the tier survives without dropping contrast. */
+  --muted-soft: oklch(0.53 0 0);          /* 5.0:1 on page, 4.6:1 on a row */
   --accent: oklch(0.945 0 0);             /* hover wash */
   --accent-foreground: oklch(0.21 0 0);
 
@@ -80,6 +84,9 @@
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
+  /* Reproduces exactly what --muted-foreground/70 rendered as on a dark card,
+     so dark mode is unchanged — only light mode needed the contrast lift. */
+  --muted-soft: oklch(0.563 0 0);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
 
@@ -119,6 +126,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-muted-soft: var(--muted-soft);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);

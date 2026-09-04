@@ -16,11 +16,13 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Kbd } from '@/components/ui/kbd';
+import { shouldIgnoreShortcut } from '../hooks/useGlobalShortcuts';
 import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
   ArrowUpCircle, Loader2, LogOut, ListVideo, ArrowLeft, Clock,
   ArrowRight, Pause, Play, AlertTriangle, FileVideo,
-  ChevronLeft, ChevronRight, Sun, Moon, Github, Coffee,
+  ChevronLeft, ChevronRight, Sun, Moon, Github, Coffee, Info,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Logo } from '@/components/ui/logo';
@@ -256,6 +258,19 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
     return () => { mounted = false; };
   }, [playlist.timestamp, videos.length]);
 
+  // Escape backs out to the history list. The global handler can't do this one:
+  // from its side we're still on the history screen, with nothing to leave.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || shouldIgnoreShortcut(e)) return;
+      if (/^(INPUT|TEXTAREA)$/.test(e.target?.tagName || '')) return;
+      e.preventDefault();
+      onBack();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onBack]);
+
   const handleRemoveVideo = async (index) => {
     const updatedItem = {
       ...playlist,
@@ -280,9 +295,16 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
       {/* Header */}
       <div className="flex-none border-b border-border/40 pb-4 mb-1">
         <div className="flex items-start gap-3">
-          <Button variant="ghost" size="icon" onClick={onBack} className="shrink-0 mt-0.5 h-8 w-8 text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={onBack} className="shrink-0 mt-0.5 h-8 w-8 text-muted-foreground hover:text-foreground">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
+              Back<Kbd>esc</Kbd>
+            </TooltipContent>
+          </Tooltip>
           <div className="flex-1 min-w-0">
             <h2
               className={`text-lg font-semibold truncate tracking-tight text-foreground${playlist.url ? ' cursor-pointer hover:underline' : ''}`}
@@ -358,7 +380,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                   <div className="flex items-center gap-1.5 min-w-0">
                     {v.format && (
                       <>
-                        <span className="text-[11px] text-muted-foreground/70 font-medium shrink-0">{v.format}</span>
+                        <span className="text-[11px] text-muted-soft font-medium shrink-0">{v.format}</span>
                         <span className="text-border text-[11px] shrink-0">•</span>
                       </>
                     )}
@@ -368,7 +390,7 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                         File moved or deleted
                       </span>
                     ) : (
-                      <span className="text-[11px] text-muted-foreground/60 truncate">{v.url}</span>
+                      <span className="text-[11px] text-muted-soft truncate">{v.url}</span>
                     )}
                   </div>
                 </div>
@@ -444,7 +466,7 @@ const HistoryPagination = ({ page, totalPages, total, onChange }) => {
 
   return (
     <div className="flex-none flex items-center justify-between gap-3 pt-3 mt-1 border-t border-border/30">
-      <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+      <span className="text-[11px] text-muted-soft tabular-nums">
         {from}–{to} of {total}
       </span>
 
@@ -472,7 +494,7 @@ const HistoryPagination = ({ page, totalPages, total, onChange }) => {
               {p}
             </button>
           ) : (
-            <span key={p} className="h-7 w-5 flex items-end justify-center pb-1.5 text-[11px] text-muted-foreground/40 select-none">
+            <span key={p} className="h-7 w-5 flex items-end justify-center pb-1.5 text-[11px] text-muted-soft select-none">
               …
             </span>
           )
@@ -623,7 +645,19 @@ const HistoryView = () => {
         {activeJobs.length > 0 && (
           <div className="flex flex-col gap-2 mb-5 animate-in fade-in duration-200">
             <div className="flex items-center gap-2 px-0.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">In Progress</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-soft">In Progress</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="You can queue multiple downloads"
+                    className="text-muted-soft/70 hover:text-muted-soft transition-colors focus:outline-none"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">You can queue multiple downloads</TooltipContent>
+              </Tooltip>
               <div className="flex-1 h-px bg-border/40" />
             </div>
             {activeJobs.map((job) => (
@@ -632,7 +666,7 @@ const HistoryView = () => {
 
             {history.length > 0 && (
               <div className="flex items-center gap-2 px-0.5 mt-3">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">History</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-soft">History</span>
                 <div className="flex-1 h-px bg-border/40" />
               </div>
             )}
@@ -683,7 +717,7 @@ const HistoryView = () => {
                   >
                     {item.title}
                   </span>
-                  <span className="text-xs text-muted-foreground/70 font-medium">
+                  <span className="text-xs text-muted-soft font-medium">
                     {item.type === 'playlist'
                       ? `Playlist • ${item.downloadedVideos?.length} videos • ${item.format}`
                       : item.format}
@@ -770,7 +804,7 @@ const HistoryView = () => {
           ) : activeJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-1.5">
               <p className="text-sm">Your download history will appear here.</p>
-              <p className="text-xs text-muted-foreground/60">Paste a YouTube link above to get started.</p>
+              <p className="text-xs text-muted-soft">Paste a YouTube link above to get started.</p>
             </div>
           ) : null}
         </div>

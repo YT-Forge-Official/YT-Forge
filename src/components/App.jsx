@@ -11,6 +11,8 @@ import SettingsDialog from './SettingsDialog';
 import LoadingComponent from './LoadingComponent';
 import { AlertCircle, ArrowLeft, Youtube, Loader2, ListVideo, Film, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
+import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts';
 
 const GoogleIcon = (props) => (
   <svg viewBox="0 0 24 24" {...props}>
@@ -19,16 +21,6 @@ const GoogleIcon = (props) => (
     <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
     <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
   </svg>
-);
-
-// ─── Keycap ───────────────────────────────────────────────────────────────────
-const Kbd = ({ children, className = '' }) => (
-  <kbd
-    className={`inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-[5px] border border-border/60 bg-background/80
-      font-sans text-[10px] font-semibold leading-none text-muted-foreground/80 shadow-[0_1px_0_0_rgba(0,0,0,0.06)] dark:shadow-[0_1px_0_0_rgba(0,0,0,0.4)] ${className}`}
-  >
-    {children}
-  </kbd>
 );
 
 // ─── Playlist / single-video disambiguation prompt ────────────────────────────
@@ -126,7 +118,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
                 <div className="text-[13.5px] font-medium text-foreground/90 leading-none transition-colors group-hover:text-foreground">
                   {opt.title}
                 </div>
-                <div className="text-[11.5px] text-muted-foreground/80 leading-none mt-1.5 truncate">
+                <div className="text-[11.5px] text-muted-soft leading-none mt-1.5 truncate">
                   {opt.description}
                 </div>
               </div>
@@ -144,7 +136,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-background/25">
           {listId ? (
-            <span className="font-mono text-[10.5px] text-muted-foreground/50 truncate min-w-0" title={listId}>
+            <span className="font-mono text-[10.5px] text-muted-soft truncate min-w-0" title={listId}>
               {listId}
             </span>
           ) : <span />}
@@ -169,6 +161,8 @@ const AppContent = () => {
     ytDlpStatus, pendingFetch,
     isAgeRestricted, openSettings,
   } = useAppContext();
+
+  useGlobalShortcuts();
 
   const handleLogin = () => {
     openSettings('account');
@@ -229,6 +223,7 @@ const AppContent = () => {
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Go back
+              <Kbd className="ml-0.5">esc</Kbd>
             </Button>
           </div>
         );
@@ -255,6 +250,7 @@ const AppContent = () => {
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to history
+            <Kbd className="ml-0.5">esc</Kbd>
           </Button>
         </div>
       );

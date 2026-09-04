@@ -12,6 +12,8 @@ export const useAppContext = () => {
 
 export const AppProvider = ({ children }) => {
   const [url, setUrl] = useState("");
+  // Held here so the "/" shortcut can reach the URL field from anywhere.
+  const urlInputRef = useRef(null);
   const [videoDetails, setVideoDetails] = useState(null);
   const [history, setHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -383,6 +385,7 @@ export const AppProvider = ({ children }) => {
 
   const value = {
     url,
+    urlInputRef,
     videoDetails,
     playlistDetails,
     isPlaylistMode,

@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Kbd } from '@/components/ui/kbd';
 
 const formatTime = (totalSeconds) => {
   if (!totalSeconds || isNaN(totalSeconds) || totalSeconds < 0) return '00:00';
@@ -312,9 +313,16 @@ const PlaylistView = () => {
         {/* Header */}
         <div className="flex-none border-b border-border/40 pb-4 space-y-3.5">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
+                Back<Kbd>esc</Kbd>
+              </TooltipContent>
+            </Tooltip>
             <div className="flex-1 min-w-0">
               <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight">{boundJob?.title || playlistDetails.title}</h2>
               <p className="text-xs text-muted-foreground truncate mt-0.5">
@@ -563,7 +571,7 @@ const PlaylistView = () => {
 
                   {/* Status */}
                   <div className="flex items-center shrink-0 pr-1">
-                    {rowState === 'queued' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Queued</span>}
+                    {rowState === 'queued' && <span className="text-[10px] font-semibold text-muted-soft uppercase tracking-widest">Queued</span>}
                     {rowState === 'completed' && <CheckCircle2 className="h-4 w-4 text-emerald-500/80" />}
                     {rowState === 'error' && (
                       <Tooltip>
@@ -571,8 +579,8 @@ const PlaylistView = () => {
                         <TooltipContent side="left" className="text-xs">Download failed</TooltipContent>
                       </Tooltip>
                     )}
-                    {rowState === 'skipped' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Skipped</span>}
-                    {rowState === 'cancelled' && <span className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">Stopped</span>}
+                    {rowState === 'skipped' && <span className="text-[10px] font-semibold text-muted-soft uppercase tracking-widest">Skipped</span>}
+                    {rowState === 'cancelled' && <span className="text-[10px] font-semibold text-muted-soft uppercase tracking-widest">Stopped</span>}
                   </div>
                 </div>
               );
@@ -591,9 +599,16 @@ const PlaylistView = () => {
       {/* Header */}
       <div className="flex-none border-b border-border/40 pb-3.5 space-y-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
+              Back<Kbd>esc</Kbd>
+            </TooltipContent>
+          </Tooltip>
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight flex items-center gap-2">
               <ListVideo className="h-4.5 w-4.5 text-muted-foreground shrink-0" />
@@ -764,7 +779,7 @@ const PlaylistView = () => {
                     {!isLoadingFormats && size > 0 && (
                       <>
                         <span className="text-border shrink-0">·</span>
-                        <span className="font-mono text-muted-foreground/70 shrink-0 tabular-nums">
+                        <span className="font-mono text-muted-soft shrink-0 tabular-nums">
                           {converted ? '~' : ''}{formatBytes(size)}
                         </span>
                       </>

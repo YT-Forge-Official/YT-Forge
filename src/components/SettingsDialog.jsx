@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -15,9 +16,9 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   CheckCircle2, ArrowUpCircle, LogOut, Loader2,
-  AlertTriangle, Github, MessageSquare, ShieldCheck, ExternalLink
+  AlertTriangle, Github, MessageSquare, ShieldCheck, ExternalLink, Check
 } from 'lucide-react';
-import { RELEASES_URL, GITHUB_URL, FEEDBACK_URL } from '@/lib/links';
+import { RELEASES_URL, GITHUB_URL, FEEDBACK_URL, PRIVACY_URL } from '@/lib/links';
 
 const GoogleIcon = (props) => (
   <svg viewBox="0 0 24 24" {...props}>
@@ -97,7 +98,7 @@ const SettingsDialog = () => {
               
               {/* Appearance */}
               <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">Appearance</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-soft">Appearance</h3>
                 <div className="flex items-center justify-between rounded-xl px-4 py-3.5 border border-border/40 bg-secondary/25">
                   <div className="flex flex-col gap-0.5 min-w-0 flex-1 pr-4">
                     <span className="text-sm font-medium text-foreground">Theme</span>
@@ -132,7 +133,7 @@ const SettingsDialog = () => {
 
               {/* Updates */}
               <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">Updates</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-soft">Updates</h3>
                 <div className={`flex items-center justify-between gap-3.5 rounded-xl px-4 py-3.5 border transition-colors ${hasNewVersion ? 'bg-primary/[0.07] border-primary/20' : 'bg-secondary/25 border-border/40'}`}>
                   {hasNewVersion ? (
                     <>
@@ -181,7 +182,7 @@ const SettingsDialog = () => {
 
               {/* Feedback */}
               <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">Community</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-soft">Community</h3>
                 <div className="flex items-center justify-between gap-3.5 rounded-xl px-4 py-3.5 border border-border/40 bg-secondary/25">
                   <div className="flex flex-col gap-0.5 min-w-0 flex-1 pr-4">
                     <span className="text-sm font-medium text-foreground">Join the Discussion</span>
@@ -207,7 +208,7 @@ const SettingsDialog = () => {
               
               {/* YouTube Account */}
               <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">YouTube Account</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-soft">YouTube Account</h3>
                 {isAuthenticated ? (
                   <div className="rounded-xl border border-border/40 bg-secondary/25 px-4 py-3.5 flex items-center gap-3.5">
                     <div className="flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border/50 shrink-0">
@@ -277,22 +278,68 @@ const SettingsDialog = () => {
                 )}
               </section>
 
+              {/* Privacy */}
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-soft">Privacy</h3>
+                <div className="rounded-xl border border-border/40 bg-secondary/25 overflow-hidden">
+                  <div className="flex items-center gap-3.5 px-4 py-3.5">
+                    <div className="flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border/50 shrink-0">
+                      <ShieldCheck className="w-4 h-4 text-emerald-500/80" />
+                    </div>
+                    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                      <span className="text-sm font-medium text-foreground">Your data stays on this device</span>
+                      <span className="text-xs text-muted-foreground">Nothing is tracked or logged.</span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-8 text-xs px-3 shrink-0 gap-1.5 bg-background hover:bg-secondary/80 border border-border/40 transition-colors"
+                      onClick={() => window.electronAPI.openExternalLink(PRIVACY_URL)}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                      Details
+                    </Button>
+                  </div>
+                  <ul className="border-t border-border/30 px-4 py-3 space-y-2">
+                    {[
+                      'Google handles sign-in; your password is never seen.',
+                      'Your session is stored locally and deleted when you sign out.',
+                      'History and settings are kept only on your computer.',
+                    ].map((line) => (
+                      <li key={line} className="flex items-start gap-2.5">
+                        <Check className="w-3.5 h-3.5 text-muted-foreground/70 mt-px shrink-0" />
+                        <span className="text-xs text-muted-foreground leading-relaxed">{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </section>
+
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="px-5 py-4 bg-muted/20 border-t border-border/30 flex items-center justify-between gap-2 shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground/70 hover:text-foreground shrink-0"
-            onClick={() => window.electronAPI.openExternalLink(GITHUB_URL)}
-            aria-label="View YT-Forge on GitHub"
-            title="View on GitHub"
-          >
-            <Github className="h-4 w-4" />
-          </Button>
+          {/* No native `title` alongside this: the OS tooltip would surface a
+              second copy a beat after the styled one. aria-label still carries
+              the accessible name. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground/70 hover:text-foreground shrink-0"
+                onClick={() => window.electronAPI.openExternalLink(GITHUB_URL)}
+                aria-label="Check yt-forge on github"
+              >
+                <Github className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" className="text-xs">
+              YT-Forge Github ↗
+            </TooltipContent>
+          </Tooltip>
           
           <Button variant="outline" size="sm" className="h-8 px-4 text-xs font-medium m-0 bg-background" onClick={closeSettings}>
             Close
