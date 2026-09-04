@@ -6,7 +6,15 @@ const os = require("os");
 const https = require("https");
 const { spawn, execFile } = require("child_process");
 const fixAsar = (p) => p.replace("app.asar", "app.asar.unpacked");
-const ffmpegPath = fixAsar(require("ffmpeg-static"));
+function resolveFfmpegPath() {
+  if (process.platform === "darwin") {
+    const root = app.isPackaged ? process.resourcesPath : app.getAppPath();
+    const bundled = path.join(root, "bin", "ffmpeg_macos");
+    if (fs.existsSync(bundled)) return bundled;
+  }
+  return fixAsar(require("ffmpeg-static"));
+}
+const ffmpegPath = resolveFfmpegPath();
 const ffprobePath = fixAsar(require("ffprobe-static").path);
 function getYtDlpEnv() {
   const dirs = /* @__PURE__ */ new Set([path.dirname(ffmpegPath), path.dirname(ffprobePath)]);
