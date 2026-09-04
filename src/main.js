@@ -21,7 +21,14 @@ function resolveFfmpegPath() {
     const bundled = path.join(root, 'bin', 'ffmpeg_macos');
     if (fs.existsSync(bundled)) return bundled;
   }
-  return fixAsar(require('ffmpeg-static'));
+  // ffmpeg-static is excluded from macOS packages entirely, so on macOS this
+  // require can legitimately fail; never let that take the app down at boot.
+  try {
+    return fixAsar(require('ffmpeg-static'));
+  } catch (err) {
+    console.error('No bundled FFmpeg found, falling back to PATH:', err.message);
+    return 'ffmpeg';
+  }
 }
 
 const ffmpegPath = resolveFfmpegPath();

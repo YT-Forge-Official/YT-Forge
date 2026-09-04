@@ -19,6 +19,17 @@ mac:
     - dmg
     - zip
   category: public.app-category.utilities
+  # ffmpeg-static's darwin-arm64 build is --enable-nonfree and may not be
+  # redistributed, so it must not be inside the DMG at all — not merely unused.
+  # bin/ffmpeg_macos (see scripts/fetch-ffmpeg.mjs) is macOS's only FFmpeg.
+  #
+  # A platform `files` list REPLACES the top-level one rather than extending it,
+  # so the top-level entries are repeated here. Keep the two lists in sync.
+  files:
+    - dist-electron/**/*
+    - dist/**/*
+    - package.json
+    - "!**/node_modules/ffmpeg-static/**"
   extraResources:
     - from: bin/yt-dlp_macos
       to: bin/yt-dlp_macos
