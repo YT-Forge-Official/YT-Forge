@@ -44,7 +44,7 @@ Unlike many downloaders, YT-FORGE prioritizes **H.264 video and AAC audio** form
   Easily convert downloaded VP9 or AV1 videos to H.264 directly within the app for maximum compatibility.
 
 - **No Ads. No Tracking.**  
-  Fully open-source and transparent.
+  Source-available and transparent.
 
 
 ---
@@ -94,6 +94,31 @@ YT-FORGE is a graphical interface for the open-source **yt-dlp** project.
 This application does not modify or circumvent the original software.
 
 Please download only content that you have permission to access or distribute.
+
+---
+
+## License
+
+YT-Forge is **source-available**, not open source.
+
+It is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). In plain terms:
+
+- **Allowed** — personal use, hobby projects, study and research, and use by charities, schools, public research bodies and government institutions. You may read, modify, fork and redistribute the source for those purposes.
+- **Not allowed** — any commercial purpose. You may not sell YT-Forge, ship it inside a paid product, or rebrand it and monetise it.
+
+"YT-Forge", the YT-Forge name and the YT-Forge logo are trademarks of the author and are **not** licensed by the above. A permitted fork must be distributed under a different name and branding.
+
+For a commercial licence, contact the author.
+
+> **Note on earlier versions:** releases up to and including v1.0.8 were published under the MIT License, and those versions remain available under MIT. This change applies to subsequent versions only.
+
+### Credits and third-party components
+
+The initial Electron + Vite + React scaffold was derived from [PikoCanFly/electron-react-vite-starter-project](https://github.com/PikoCanFly/electron-react-vite-starter-project) (MIT). The application itself was written by Suja Rahaman.
+
+YT-Forge also bundles [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [FFmpeg / FFprobe](https://ffmpeg.org) (GPL-3.0-or-later), which it invokes as separate executables.
+
+Full attributions and licence texts: **[NOTICE.md](NOTICE.md)**.
 
 ---
 

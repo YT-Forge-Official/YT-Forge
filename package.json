@@ -36,7 +36,7 @@
     "name": "Suja",
     "email": "sujarahaman.dms.727@gmail.com"
   },
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",
     "concurrently": "^9.2.1",
