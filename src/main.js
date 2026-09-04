@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const https = require("https");
 const { spawn, execFile } = require("child_process");
 
@@ -23,8 +24,16 @@ function getYtDlpEnv() {
   };
 }
 
-const _Store = require("electron-store");
-const Store = _Store.default || _Store;
+// electron-store v8 exports the class directly.
+//
+// Do NOT reintroduce a `.default || ` interop guard here. ElectronStore extends
+// Conf, and conf's CJS interop sets `Conf.default = Conf`, so
+// `ElectronStore.default` resolves *up the static chain* to plain Conf — which
+// knows nothing about Electron and writes to envPaths('electron-store') instead
+// of app.getPath('userData'). That regression silently moved every user's
+// config out of userData; migrateMisplacedStore() below cleans it up.
+const Store = require("electron-store");
+
 
 // Base yt-dlp flags shared by info fetch and download
 const BASE_ARGS = [
@@ -43,6 +52,87 @@ const BASE_ARGS = [
 const DOWNLOAD_SPEED_ARGS = [
   '--concurrent-fragments', '4',
 ];
+
+/**
+ * The config location plain `conf` falls back to when it cannot see Electron's
+ * `app` module — i.e. env-paths('electron-store', { suffix: 'nodejs' }).config.
+ * Spelled out per platform rather than pulled from env-paths so it stays
+ * readable and does not depend on a transitive dependency surviving bundling.
+ */
+function legacyMisplacedConfigPath() {
+  const name = 'electron-store-nodejs';
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Preferences', name, 'config.json');
+  }
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    return path.join(appData, name, 'Config', 'config.json');
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), name, 'config.json');
+}
+
+function readJsonOrNull(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One-time repair for a config file written outside userData.
+ *
+ * Affected builds instantiated raw `conf` instead of electron-store (see the
+ * note above the require), so settings, theme and download history landed in
+ * ~/Library/Preferences/electron-store-nodejs (and the equivalent elsewhere)
+ * instead of userData. Installs that predate the regression also have an older
+ * config in the correct place, so this MERGES the two rather than overwriting:
+ *
+ *   - scalar keys come from the misplaced file, which is always the newer one;
+ *   - downloadHistory is concatenated and re-sorted newest-first. Nothing is
+ *     deduplicated — history entries are addressed by `timestamp` elsewhere in
+ *     this file and duplicates already occur legitimately, so dropping any
+ *     would delete real history.
+ *
+ * Runs before the store is constructed. On success the misplaced file is
+ * renamed, not deleted, which both keeps the original bytes recoverable and
+ * makes this a no-op on every later launch.
+ */
+function migrateMisplacedStore() {
+  const legacyPath = legacyMisplacedConfigPath();
+  const legacy = readJsonOrNull(legacyPath);
+  if (!legacy) return; // nothing misplaced, or unreadable — leave it alone
+
+  const correctPath = path.join(app.getPath('userData'), 'config.json');
+  const current = readJsonOrNull(correctPath);
+
+  const merged = { ...(current || {}), ...legacy };
+  const history = [
+    ...(Array.isArray(legacy.downloadHistory) ? legacy.downloadHistory : []),
+    ...(current && Array.isArray(current.downloadHistory) ? current.downloadHistory : []),
+  ];
+  if (history.length) {
+    history.sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')));
+    merged.downloadHistory = history;
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(correctPath), { recursive: true });
+    // Keep whatever we are about to replace, so a bad merge stays recoverable.
+    if (current) fs.copyFileSync(correctPath, correctPath + '.pre-migration-backup');
+    // '\t' matches conf's own serialisation, so the file format is unchanged.
+    fs.writeFileSync(correctPath, JSON.stringify(merged, null, '\t'), 'utf8');
+    fs.renameSync(legacyPath, legacyPath + '.migrated');
+    console.log('[store] merged misplaced config into ' + correctPath);
+  } catch (err) {
+    // A failed migration must never stop the app launching — the store simply
+    // loads whatever is already at the correct path.
+    console.error('[store] config migration failed:', err);
+  }
+}
+
+migrateMisplacedStore();
 
 const store = new Store();
 let mainWindow;
@@ -302,6 +392,7 @@ function startNetworkMonitoring() {
 }
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
 
 app.whenReady().then(() => {
   createWindow();
@@ -1006,6 +1097,56 @@ ipcMain.handle("choose-directory", async () => {
   return result.filePaths[0];
 });
 
+// Ordered download candidates for a thumbnail URL. Playlist entries carry
+// hqdefault (480x360, letterboxed to 4:3) and ?sqp= variants of it are served
+// as WebP regardless of Accept headers — so for i.ytimg.com try the clean
+// 16:9 JPEG variants first, falling back until one exists (missing variants
+// return a real 404). Non-YouTube URLs are used as-is.
+function thumbnailCandidates(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname === 'i.ytimg.com') {
+      u.search = '';
+      u.pathname = u.pathname.replace('/vi_webp/', '/vi/').replace(/\.webp$/, '.jpg');
+      const m = u.pathname.match(/^\/vi\/([^/]+)\//);
+      if (m) {
+        const urls = ['maxresdefault.jpg', 'hq720.jpg', 'sddefault.jpg', 'hqdefault.jpg']
+          .map(name => `https://i.ytimg.com/vi/${m[1]}/${name}`);
+        if (!urls.includes(u.toString())) urls.push(u.toString());
+        return urls;
+      }
+      return [u.toString()];
+    }
+  } catch (e) { }
+  return [rawUrl];
+}
+
+function fetchImageToFile(url, filePath) {
+  return new Promise((resolve) => {
+    // Closing the stream on failure emits 'finish', so an explicit flag keeps
+    // the success handler from claiming a failed attempt; resolving only after
+    // the unlink keeps it from racing the next fallback candidate's write.
+    let failed = false;
+    const fileStream = fs.createWriteStream(filePath);
+    const fail = (error) => {
+      failed = true;
+      fileStream.close(() => fs.unlink(filePath, () => resolve({ success: false, error })));
+    };
+    const request = https.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        fail(`Download failed. Status: ${response.statusCode}`);
+        return;
+      }
+      response.pipe(fileStream);
+    });
+    fileStream.on('finish', () => {
+      if (!failed) fileStream.close(() => resolve({ success: true, path: filePath }));
+    });
+    request.on('error', (err) => fail(err.message));
+  });
+}
+
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
   const safeTitle = title.replace(/[\\/:"*?<>|]/g, '');
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
@@ -1013,15 +1154,12 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
     buttonLabel: 'Save Image', filters: [{ name: 'JPEG Image', extensions: ['jpg'] }]
   });
   if (canceled || !filePath) return { success: false, error: 'Save dialog was canceled.' };
-  return new Promise((resolve) => {
-    const fileStream = fs.createWriteStream(filePath);
-    const request = https.get(url, (response) => {
-      if (response.statusCode !== 200) { fs.unlink(filePath, () => { }); resolve({ success: false, error: `Download failed. Status: ${response.statusCode}` }); return; }
-      response.pipe(fileStream);
-    });
-    fileStream.on('finish', () => fileStream.close(() => resolve({ success: true, path: filePath })));
-    request.on('error', (err) => { fs.unlink(filePath, () => { }); resolve({ success: false, error: err.message }); });
-  });
+  let result = { success: false, error: 'No thumbnail URL.' };
+  for (const candidate of thumbnailCandidates(url)) {
+    result = await fetchImageToFile(candidate, filePath);
+    if (result.success) break;
+  }
+  return result;
 });
 
 /**
@@ -1132,6 +1270,7 @@ function removeJobFromQueue(jobId) {
 function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, jobId, itemId, job }) {
   return new Promise(async (outerResolve) => {
     let isCancelled = false;
+    let didConvert = false;
     let isPaused = false;
     let pauseReason = null;
     let ytDlpProcess = null;
@@ -1502,6 +1641,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             } else if (code === 0) {
               try {
                 fs.renameSync(tempOutput, filePath);
+                didConvert = true;
                 console.log('Conversion successful. Overwrote original file.');
               } catch (e) { console.error('Rename failed after conversion', e); }
               resolve();
@@ -1525,7 +1665,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         stage: 'done',
       });
 
-      outerResolve({ success: true, path: filePath, keptOriginal: isCancelled && keepOriginalOnCancel });
+      outerResolve({ success: true, path: filePath, converted: didConvert, keptOriginal: isCancelled && keepOriginalOnCancel });
     } catch (err) {
       outerResolve({
         success: false,
@@ -1563,9 +1703,17 @@ function resolveOutputPath(targetDir, title, ext, allowDuplicates) {
   return filePath;
 }
 
-function addVideoHistoryItem(job, finalPath) {
+// Quality label for history entries. When the file was converted offline the
+// codec tag shows source → final, e.g. "2160p60 (VP9 → H.264)", so converted
+// files are distinguishable from native downloads.
+function describeQuality(qualityLabel, converted) {
+  if (!converted || !qualityLabel) return qualityLabel;
+  return qualityLabel.replace(/\((VP9|AV1)\)/, '($1 → H.264)');
+}
+
+function addVideoHistoryItem(job, finalPath, converted) {
   const history = store.get('downloadHistory', []);
-  const label = job.type === 'mp3' ? 'AUDIO' : job.qualityLabel;
+  const label = job.type === 'mp3' ? 'AUDIO' : describeQuality(job.qualityLabel, converted);
   const newHistoryItem = {
     id: job.videoId,
     title: job.title,
@@ -1601,6 +1749,9 @@ function addPlaylistHistoryItem(job) {
       thumbnailUrl: v.thumbnail,
       duration: v.duration,
       filePath: v.filePath,
+      format: v.type === 'mp3'
+        ? 'AUDIO (MP3)'
+        : `${describeQuality(v.qualityLabel, v.converted) || 'Best'} (MP4)`,
     })),
   };
   store.set('downloadHistory', [newHistoryItem, ...history]);
@@ -1621,7 +1772,7 @@ async function runVideoJob(job) {
 
   if (result.success || result.keptOriginal) {
     job.status = 'completed';
-    addVideoHistoryItem(job, result.path || job.filePath);
+    addVideoHistoryItem(job, result.path || job.filePath, result.converted);
     safeSend('job-finished', { jobId: job.id, kind: 'video', success: true, path: result.path || job.filePath });
   } else if (result.cancelled) {
     job.status = 'cancelled';
@@ -1657,7 +1808,10 @@ async function runPlaylistJob(job) {
 
     if (job.cancelled) {
       item.status = result.success ? 'completed' : 'cancelled';
-      if (result.success) item.filePath = result.path;
+      if (result.success) {
+        item.filePath = result.path;
+        item.converted = !!result.converted;
+      }
       break;
     }
     if (job.skipCurrent) {
@@ -1669,6 +1823,7 @@ async function runPlaylistJob(job) {
     if (result.success) {
       item.status = 'completed';
       item.filePath = result.path;
+      item.converted = !!result.converted;
     } else {
       item.status = 'error';
       item.error = result.error;

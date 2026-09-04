@@ -36,6 +36,19 @@ export const AppProvider = ({ children }) => {
   // active download shows the exact same view it was started from)
   const [boundJobId, setBoundJobId] = useState(null);
 
+  // ── Settings state ────────────────────────────────────────────────────────────
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('general');
+
+  const openSettings = useCallback((tab = 'general') => {
+    setSettingsTab(tab);
+    setIsSettingsOpen(true);
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    setIsSettingsOpen(false);
+  }, []);
+
   const fetchIdRef = useRef(0);
   const urlRef = useRef(url);
   urlRef.current = url;
@@ -112,6 +125,33 @@ export const AppProvider = ({ children }) => {
     setAuthExpired(false);
     wasAuthenticatedRef.current = false;
   };
+
+  // ── Version checking ──────────────────────────────────────────────────────────
+  const [appVersion, setAppVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState('');
+  const [hasNewVersion, setHasNewVersion] = useState(false);
+  const [versionChecked, setVersionChecked] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    window.electronAPI.getAppVersion().then(v => {
+      if (!mounted) return;
+      setAppVersion(v);
+      fetch('https://api.github.com/repos/YT-Forge-Official/YT-Forge/releases/latest')
+        .then(res => res.json())
+        .then(data => {
+          if (!mounted || !data?.tag_name) return;
+          const latest = data.tag_name.replace(/^v/, '');
+          setLatestVersion(latest);
+          setHasNewVersion(latest !== v);
+          setVersionChecked(true);
+        })
+        .catch(() => {
+          if (mounted) setVersionChecked(true);
+        });
+    });
+    return () => { mounted = false; };
+  }, []);
 
   // The actual fetch logic — uses urlRef so it's always fresh
   const runFetch = useCallback(async () => {
@@ -365,6 +405,16 @@ export const AppProvider = ({ children }) => {
     boundJobId,
     setBoundJobId,
     viewJob,
+    // settings
+    isSettingsOpen,
+    settingsTab,
+    openSettings,
+    closeSettings,
+    // versions
+    appVersion,
+    latestVersion,
+    hasNewVersion,
+    versionChecked,
     // actions
     setUrl,
     setVideoDetails,

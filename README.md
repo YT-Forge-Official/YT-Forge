@@ -97,6 +97,17 @@ Please download only content that you have permission to access or distribute.
 
 ---
 
+## Privacy
+
+**No telemetry, no analytics, no accounts.** Your downloads, history, and
+settings stay on your machine, and nothing about them is ever sent anywhere.
+
+At launch YT-Forge asks GitHub whether yt-dlp or the app itself has a newer
+release. That is the only thing it sends, and it goes to GitHub, not to us.
+Every request, plus the optional YouTube sign-in: **[PRIVACY.md](PRIVACY.md)**.
+
+---
+
 <div align="center">
 Built with Electron, React, and Vite.
 </div>

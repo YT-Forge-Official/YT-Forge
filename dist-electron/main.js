@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const https = require("https");
 const { spawn, execFile } = require("child_process");
 const fixAsar = (p) => p.replace("app.asar", "app.asar.unpacked");
@@ -16,8 +17,7 @@ function getYtDlpEnv() {
     ELECTRON_RUN_AS_NODE: "1"
   };
 }
-const _Store = require("electron-store");
-const Store = _Store.default || _Store;
+const Store = require("electron-store");
 const BASE_ARGS = [
   "--no-playlist",
   "--ignore-config",
@@ -37,6 +37,51 @@ const DOWNLOAD_SPEED_ARGS = [
   "--concurrent-fragments",
   "4"
 ];
+function legacyMisplacedConfigPath() {
+  const name = "electron-store-nodejs";
+  const home = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Preferences", name, "config.json");
+  }
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
+    return path.join(appData, name, "Config", "config.json");
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), name, "config.json");
+}
+function readJsonOrNull(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function migrateMisplacedStore() {
+  const legacyPath = legacyMisplacedConfigPath();
+  const legacy = readJsonOrNull(legacyPath);
+  if (!legacy) return;
+  const correctPath = path.join(app.getPath("userData"), "config.json");
+  const current = readJsonOrNull(correctPath);
+  const merged = { ...current || {}, ...legacy };
+  const history = [
+    ...Array.isArray(legacy.downloadHistory) ? legacy.downloadHistory : [],
+    ...current && Array.isArray(current.downloadHistory) ? current.downloadHistory : []
+  ];
+  if (history.length) {
+    history.sort((a, b) => String(b.timestamp ?? "").localeCompare(String(a.timestamp ?? "")));
+    merged.downloadHistory = history;
+  }
+  try {
+    fs.mkdirSync(path.dirname(correctPath), { recursive: true });
+    if (current) fs.copyFileSync(correctPath, correctPath + ".pre-migration-backup");
+    fs.writeFileSync(correctPath, JSON.stringify(merged, null, "	"), "utf8");
+    fs.renameSync(legacyPath, legacyPath + ".migrated");
+    console.log("[store] merged misplaced config into " + correctPath);
+  } catch (err) {
+    console.error("[store] config migration failed:", err);
+  }
+}
+migrateMisplacedStore();
 const store = new Store();
 let mainWindow;
 let currentInfoFetchProcess = null;
@@ -807,6 +852,46 @@ ipcMain.handle("choose-directory", async () => {
   }
   return result.filePaths[0];
 });
+function thumbnailCandidates(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname === "i.ytimg.com") {
+      u.search = "";
+      u.pathname = u.pathname.replace("/vi_webp/", "/vi/").replace(/\.webp$/, ".jpg");
+      const m = u.pathname.match(/^\/vi\/([^/]+)\//);
+      if (m) {
+        const urls = ["maxresdefault.jpg", "hq720.jpg", "sddefault.jpg", "hqdefault.jpg"].map((name) => `https://i.ytimg.com/vi/${m[1]}/${name}`);
+        if (!urls.includes(u.toString())) urls.push(u.toString());
+        return urls;
+      }
+      return [u.toString()];
+    }
+  } catch (e) {
+  }
+  return [rawUrl];
+}
+function fetchImageToFile(url, filePath) {
+  return new Promise((resolve) => {
+    let failed = false;
+    const fileStream = fs.createWriteStream(filePath);
+    const fail = (error) => {
+      failed = true;
+      fileStream.close(() => fs.unlink(filePath, () => resolve({ success: false, error })));
+    };
+    const request = https.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        fail(`Download failed. Status: ${response.statusCode}`);
+        return;
+      }
+      response.pipe(fileStream);
+    });
+    fileStream.on("finish", () => {
+      if (!failed) fileStream.close(() => resolve({ success: true, path: filePath }));
+    });
+    request.on("error", (err) => fail(err.message));
+  });
+}
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
   const safeTitle = title.replace(/[\\/:"*?<>|]/g, "");
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
@@ -816,24 +901,12 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
     filters: [{ name: "JPEG Image", extensions: ["jpg"] }]
   });
   if (canceled || !filePath) return { success: false, error: "Save dialog was canceled." };
-  return new Promise((resolve) => {
-    const fileStream = fs.createWriteStream(filePath);
-    const request = https.get(url, (response) => {
-      if (response.statusCode !== 200) {
-        fs.unlink(filePath, () => {
-        });
-        resolve({ success: false, error: `Download failed. Status: ${response.statusCode}` });
-        return;
-      }
-      response.pipe(fileStream);
-    });
-    fileStream.on("finish", () => fileStream.close(() => resolve({ success: true, path: filePath })));
-    request.on("error", (err) => {
-      fs.unlink(filePath, () => {
-      });
-      resolve({ success: false, error: err.message });
-    });
-  });
+  let result = { success: false, error: "No thumbnail URL." };
+  for (const candidate of thumbnailCandidates(url)) {
+    result = await fetchImageToFile(candidate, filePath);
+    if (result.success) break;
+  }
+  return result;
 });
 function deletePartialDownloadFiles(filePath) {
   try {
@@ -920,6 +993,7 @@ function removeJobFromQueue(jobId) {
 function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, jobId, itemId, job }) {
   return new Promise(async (outerResolve) => {
     let isCancelled = false;
+    let didConvert = false;
     let isPaused = false;
     let pauseReason = null;
     let ytDlpProcess = null;
@@ -1252,6 +1326,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             } else if (code === 0) {
               try {
                 fs.renameSync(tempOutput, filePath);
+                didConvert = true;
                 console.log("Conversion successful. Overwrote original file.");
               } catch (e) {
                 console.error("Rename failed after conversion", e);
@@ -1273,7 +1348,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         totalBytes: finalSize,
         stage: "done"
       });
-      outerResolve({ success: true, path: filePath, keptOriginal: isCancelled && keepOriginalOnCancel });
+      outerResolve({ success: true, path: filePath, converted: didConvert, keptOriginal: isCancelled && keepOriginalOnCancel });
     } catch (err) {
       outerResolve({
         success: false,
@@ -1311,9 +1386,13 @@ function resolveOutputPath(targetDir, title, ext, allowDuplicates) {
   }
   return filePath;
 }
-function addVideoHistoryItem(job, finalPath) {
+function describeQuality(qualityLabel, converted) {
+  if (!converted || !qualityLabel) return qualityLabel;
+  return qualityLabel.replace(/\((VP9|AV1)\)/, "($1 → H.264)");
+}
+function addVideoHistoryItem(job, finalPath, converted) {
   const history = store.get("downloadHistory", []);
-  const label = job.type === "mp3" ? "AUDIO" : job.qualityLabel;
+  const label = job.type === "mp3" ? "AUDIO" : describeQuality(job.qualityLabel, converted);
   const newHistoryItem = {
     id: job.videoId,
     title: job.title,
@@ -1348,7 +1427,8 @@ function addPlaylistHistoryItem(job) {
       url: v.url,
       thumbnailUrl: v.thumbnail,
       duration: v.duration,
-      filePath: v.filePath
+      filePath: v.filePath,
+      format: v.type === "mp3" ? "AUDIO (MP3)" : `${describeQuality(v.qualityLabel, v.converted) || "Best"} (MP4)`
     }))
   };
   store.set("downloadHistory", [newHistoryItem, ...history]);
@@ -1367,7 +1447,7 @@ async function runVideoJob(job) {
   });
   if (result.success || result.keptOriginal) {
     job.status = "completed";
-    addVideoHistoryItem(job, result.path || job.filePath);
+    addVideoHistoryItem(job, result.path || job.filePath, result.converted);
     safeSend("job-finished", { jobId: job.id, kind: "video", success: true, path: result.path || job.filePath });
   } else if (result.cancelled) {
     job.status = "cancelled";
@@ -1399,7 +1479,10 @@ async function runPlaylistJob(job) {
     });
     if (job.cancelled) {
       item.status = result.success ? "completed" : "cancelled";
-      if (result.success) item.filePath = result.path;
+      if (result.success) {
+        item.filePath = result.path;
+        item.converted = !!result.converted;
+      }
       break;
     }
     if (job.skipCurrent) {
@@ -1411,6 +1494,7 @@ async function runPlaylistJob(job) {
     if (result.success) {
       item.status = "completed";
       item.filePath = result.path;
+      item.converted = !!result.converted;
     } else {
       item.status = "error";
       item.error = result.error;

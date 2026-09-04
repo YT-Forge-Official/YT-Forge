@@ -20,10 +20,12 @@ import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
   ArrowUpCircle, Loader2, LogOut, ListVideo, ArrowLeft, Clock,
   ArrowRight, Pause, Play, AlertTriangle, FileVideo,
-  ChevronLeft, ChevronRight, Sun, Moon, Github,
+  ChevronLeft, ChevronRight, Sun, Moon, Github, Coffee,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { Logo } from '@/components/ui/logo';
 import { useTheme } from '../contexts/ThemeContext';
+import { LANDING_URL, KOFI_URL, GITHUB_URL, RELEASES_URL } from '@/lib/links';
 
 // History entries shown per page. In-progress downloads live in their own
 // section and never count towards this — a playlist is a single entry.
@@ -51,14 +53,6 @@ const buildPageList = (current, total) => {
   return out;
 };
 
-const GoogleIcon = (props) => (
-  <svg viewBox="0 0 24 24" {...props}>
-    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-  </svg>
-);
 
 const thumbFallback = (e) => {
   if (e.target.src.includes('maxresdefault')) {
@@ -239,236 +233,6 @@ const ActiveDownloadCard = ({ job }) => {
   );
 };
 
-// ─── Appearance setting ───────────────────────────────────────────────────────
-const AppearanceSection = () => {
-  const { isDark } = useTheme();
-
-  return (
-    <section className="space-y-2.5">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">Appearance</h3>
-      <div className="flex items-center gap-3.5 rounded-xl px-4 py-3.5 border border-border/40 bg-secondary/25">
-        <div className="relative flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border/50 shrink-0">
-          <Sun
-            className={`absolute w-4.5 h-4.5 text-amber-500 transition-all duration-300 ${isDark ? 'opacity-0 scale-50 rotate-90' : 'opacity-100 scale-100 rotate-0'}`}
-            strokeWidth={1.9}
-          />
-          <Moon
-            className={`absolute w-4.5 h-4.5 text-indigo-300 transition-all duration-300 ${isDark ? 'opacity-100 scale-100 rotate-0' : 'opacity-0 scale-50 -rotate-90'}`}
-            strokeWidth={1.9}
-          />
-        </div>
-        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-          <span className="text-sm font-medium text-foreground">{isDark ? 'Dark' : 'Light'} mode</span>
-          <span className="text-xs text-muted-foreground">
-            {isDark ? 'Easy on the eyes at night.' : 'Bright, clean and high contrast.'}
-          </span>
-        </div>
-        <ThemeToggle />
-      </div>
-    </section>
-  );
-};
-
-// ─── Settings dialog ──────────────────────────────────────────────────────────
-const SettingsDialog = ({ appVersion, latestVersion, hasNewVersion, versionChecked }) => {
-  const { isAuthenticated, authExpired, loginYoutube, logoutYoutube, refreshAuth } = useAppContext();
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
-    await loginYoutube();
-    setIsLoggingIn(false);
-  };
-
-  return (
-    <AlertDialog onOpenChange={(open) => { if (open) refreshAuth(); }}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <AlertDialogTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="relative text-muted-foreground hover:text-foreground gap-1.5 h-7 text-xs"
-            >
-              <Settings className="h-3 w-3" />
-              Settings
-              {hasNewVersion && (
-                <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-                </span>
-              )}
-            </Button>
-          </AlertDialogTrigger>
-        </TooltipTrigger>
-        {hasNewVersion && (
-          <TooltipContent side="bottom" className="text-xs">
-            Newer version available
-          </TooltipContent>
-        )}
-      </Tooltip>
-
-      <AlertDialogContent className="sm:max-w-md bg-background border border-border/30 shadow-2xl p-0 overflow-hidden outline-none rounded-xl gap-0">
-        <div className="px-5 pt-6 pb-5 max-h-[80vh] overflow-y-auto">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-6">
-            <AlertDialogTitle className="text-lg font-semibold tracking-tight">
-              Settings
-            </AlertDialogTitle>
-            <span className="text-[11px] font-mono font-medium px-2 py-1 rounded-md bg-secondary/50 text-muted-foreground border border-border/40">
-              v{appVersion || '—'}
-            </span>
-          </div>
-
-          <div className="space-y-6">
-            <AppearanceSection />
-
-            {/* Updates */}
-            <section className="space-y-2.5">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">App Updates</h3>
-              <div className={`flex items-center gap-3.5 rounded-xl px-4 py-3.5 border transition-colors ${hasNewVersion ? 'bg-primary/[0.07] border-primary/20' : 'bg-secondary/25 border-border/40'}`}>
-                {hasNewVersion ? (
-                  <>
-                    <ArrowUpCircle className="w-4.5 h-4.5 text-primary shrink-0" />
-                    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                      <span className="text-sm font-medium text-foreground">Update available</span>
-                      <AlertDialogDescription className="text-xs text-muted-foreground m-0 p-0">
-                        Version <span className="font-semibold text-foreground/80">v{latestVersion}</span> is ready on GitHub. Updates are always manual — nothing installs on its own.
-                      </AlertDialogDescription>
-                    </div>
-                    <Button
-                      size="sm"
-                      className="h-8 text-xs px-3 shrink-0"
-                      onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
-                    >
-                      Get Update
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500/70 shrink-0" />
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium text-foreground/90">You're up to date</span>
-                      <AlertDialogDescription className="text-xs text-muted-foreground m-0 p-0">
-                        {versionChecked ? 'Running the latest release.' : 'Checking for updates…'}
-                      </AlertDialogDescription>
-                    </div>
-                  </>
-                )}
-              </div>
-            </section>
-
-            {/* YouTube account */}
-            <section className="space-y-2.5">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">YouTube Account</h3>
-
-              {isAuthenticated ? (
-                <div className="rounded-xl border border-border/40 bg-secondary/25 px-4 py-3.5 flex items-center gap-3.5">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border/50 shrink-0">
-                    <GoogleIcon className="w-4.5 h-4.5" />
-                  </div>
-                  <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                    <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Signed in
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500/80" />
-                    </span>
-                    <span className="text-xs text-muted-foreground">Age-restricted downloads enabled</span>
-                  </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-8 text-xs gap-1.5 px-2.5 text-muted-foreground hover:text-foreground shrink-0">
-                        <LogOut className="w-3.5 h-3.5" />
-                        Sign out
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Sign out of YouTube?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          You won't be able to download age-restricted videos until you sign in again.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={logoutYoutube} className="bg-destructive text-white hover:bg-destructive/90">
-                          Sign Out
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-border/40 bg-secondary/25 p-4 space-y-3.5">
-                  {authExpired ? (
-                    <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-500/80 mt-0.5 shrink-0" />
-                      <p className="text-sm text-muted-foreground leading-relaxed">
-                        Your session has expired. Sign in again to keep downloading{' '}
-                        <strong className="text-foreground/80 font-medium">age-restricted videos</strong>.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      Sign in to download <strong className="text-foreground/80 font-medium">age-restricted videos</strong>.
-                      Everything else works without an account.
-                    </p>
-                  )}
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={handleLogin}
-                    disabled={isLoggingIn}
-                    className="w-full h-9 bg-white text-neutral-900 border border-black/10 hover:bg-neutral-50 dark:border-transparent dark:hover:bg-white/90 shadow-sm transition-all"
-                  >
-                    {isLoggingIn ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    ) : (
-                      <GoogleIcon className="w-4 h-4 mr-2" />
-                    )}
-                    <span className="font-medium text-sm">Sign in with Google</span>
-                  </Button>
-                </div>
-              )}
-            </section>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="px-5 py-4 bg-muted/20 border-t border-border/30 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-0.5 min-w-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2"
-              onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge/releases/latest')}
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              View releases on GitHub
-            </Button>
-            {/* <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 text-muted-foreground/70 hover:text-foreground"
-                  onClick={() => window.electronAPI.openExternalLink('https://github.com/YT-Forge-Official/YT-Forge')}
-                >
-                  <Github className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                Support this project ❤️
-              </TooltipContent>
-            </Tooltip> */}
-          </div>
-          <AlertDialogCancel className="h-8 px-4 text-xs m-0">
-            Close
-          </AlertDialogCancel>
-        </div>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-};
 
 // ─── Playlist history detail view ─────────────────────────────────────────────
 const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
@@ -592,6 +356,12 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
                     {v.title}
                   </p>
                   <div className="flex items-center gap-1.5 min-w-0">
+                    {v.format && (
+                      <>
+                        <span className="text-[11px] text-muted-foreground/70 font-medium shrink-0">{v.format}</span>
+                        <span className="text-border text-[11px] shrink-0">•</span>
+                      </>
+                    )}
                     {exists === false && v.filePath ? (
                       <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-500/70 font-medium shrink-0">
                         <AlertTriangle className="h-2.5 w-2.5" />
@@ -723,11 +493,7 @@ const HistoryPagination = ({ page, totalPages, total, onChange }) => {
 
 // ─── Main history view ────────────────────────────────────────────────────────
 const HistoryView = () => {
-  const { history, setHistory, activeJobs } = useAppContext();
-  const [appVersion, setAppVersion] = useState('');
-  const [latestVersion, setLatestVersion] = useState('');
-  const [hasNewVersion, setHasNewVersion] = useState(false);
-  const [versionChecked, setVersionChecked] = useState(false);
+  const { history, setHistory, activeJobs, openSettings, hasNewVersion } = useAppContext();
   const [selectedPlaylistHistory, setSelectedPlaylistHistory] = useState(null);
   const [page, setPage] = useState(1);
   const scrollRef = useRef(null);
@@ -751,26 +517,7 @@ const HistoryView = () => {
     scrollRef.current?.scrollTo({ top: 0 });
   };
 
-  useEffect(() => {
-    let mounted = true;
-    window.electronAPI.getAppVersion().then(v => {
-      if (!mounted) return;
-      setAppVersion(v);
-      fetch('https://api.github.com/repos/YT-Forge-Official/YT-Forge/releases/latest')
-        .then(res => res.json())
-        .then(data => {
-          if (!mounted || !data?.tag_name) return;
-          const latest = data.tag_name.replace(/^v/, '');
-          setLatestVersion(latest);
-          if (latest.localeCompare(v, undefined, { numeric: true, sensitivity: 'base' }) > 0) {
-            setHasNewVersion(true);
-          }
-          setVersionChecked(true);
-        })
-        .catch(() => setVersionChecked(true));
-    });
-    return () => { mounted = false; };
-  }, []);
+
 
   const handleClearHistory = async () => {
     await window.electronAPI.clearHistory();
@@ -801,12 +548,47 @@ const HistoryView = () => {
         </h2>
 
         <div className="flex items-center gap-2">
-          <SettingsDialog
-            appVersion={appVersion}
-            latestVersion={latestVersion}
-            hasNewVersion={hasNewVersion}
-            versionChecked={versionChecked}
-          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="kofi-affordance text-muted-foreground gap-1.5 h-7 text-xs"
+                onClick={() => window.electronAPI.openExternalLink(KOFI_URL)}
+              >
+                <Coffee className="h-3 w-3" />
+                Buy me a coffee
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              Enjoying YT-Forge? Treat the developer to a coffee! ❤️
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openSettings('general')}
+                className="relative text-muted-foreground hover:text-foreground gap-1.5 h-7 text-xs"
+              >
+                <Settings className="h-3 w-3" />
+                Settings
+                {hasNewVersion && (
+                  <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+                  </span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            {hasNewVersion && (
+              <TooltipContent side="bottom" className="text-xs">
+                Newer version available
+              </TooltipContent>
+            )}
+          </Tooltip>
 
           {history.length > 0 && (
             <AlertDialog>

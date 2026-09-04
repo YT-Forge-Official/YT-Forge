@@ -7,6 +7,7 @@ import Header from './Header';
 import HistoryView from './HistoryView';
 import DetailsView from './DetailsView';
 import PlaylistView from './PlaylistView';
+import SettingsDialog from './SettingsDialog';
 import LoadingComponent from './LoadingComponent';
 import { AlertCircle, ArrowLeft, Youtube, Loader2, ListVideo, Film, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -166,16 +167,11 @@ const AppContent = () => {
     isLoading, videoDetails, playlistDetails, isPlaylistMode, hybridPromptUrl, fetchError,
     goBackToHistory, cancelFetchDetails, handleHybridChoice,
     ytDlpStatus, pendingFetch,
-    isAgeRestricted, loginYoutube,
+    isAgeRestricted, openSettings,
   } = useAppContext();
 
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
-    await loginYoutube();
-    setIsLoggingIn(false);
-    goBackToHistory(); // Go back so they can try fetching again
+  const handleLogin = () => {
+    openSettings('account');
   };
 
 
@@ -219,15 +215,10 @@ const AppContent = () => {
               <Button
                 variant="default"
                 onClick={handleLogin}
-                disabled={isLoggingIn}
                 className="w-full mt-2 h-10 bg-white text-neutral-900 border border-black/10 hover:bg-neutral-50 dark:border-transparent dark:hover:bg-white/90 shadow-md hover:shadow-lg transition-all"
               >
-                {isLoggingIn ? (
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                ) : (
-                  <GoogleIcon className="h-5 w-5 mr-2" />
-                )}
-                <span className="font-medium text-[15px]">Sign in with Google</span>
+                <GoogleIcon className="h-5 w-5 mr-2" />
+                <span className="font-medium text-[15px]">Open Settings to Sign in</span>
               </Button>
             </div>
             <Button
@@ -274,6 +265,7 @@ const AppContent = () => {
   return (
     <div className="flex flex-col gap-4 h-full">
       <Header />
+      <SettingsDialog />
       <Card className="flex-1 overflow-hidden border-border/50">
         <CardContent className="flex flex-col h-full p-5">
           {renderCardContent()}

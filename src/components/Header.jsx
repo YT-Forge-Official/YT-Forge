@@ -3,13 +3,15 @@ import { useAppContext } from '../contexts/AppContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Loader2, Search, Coffee, ArrowDownToLine } from 'lucide-react';
-
-const KOFI_URL = 'https://ko-fi.com/D3Z1266RDI';
+import { Loader2, Search, ArrowDownToLine } from 'lucide-react';
+import { Logo } from '@/components/ui/logo';
+import { LANDING_URL } from '@/lib/links';
 
 const Header = () => {
   const { url, handleUrlChange, handleFetchDetails, isLoading, activeJobs, isDownloading, goBackToHistory } = useAppContext();
 
+  // px-[21px] matches the card's inner inset below (20px padding + 1px border),
+  // so this row shares a column with Downloads / Settings / Clear.
   return (
     <header className="flex items-center gap-3">
       <Input
@@ -62,20 +64,21 @@ const Header = () => {
         </TooltipContent>
       </Tooltip>
 
-      {/* Ko-fi — warms to gold on hover, the one bit of colour up here */}
+      {/* The mark, doing what a brand mark does: linking to the site */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className="kofi-affordance h-10 w-10 shrink-0 text-muted-foreground"
-            onClick={() => window.electronAPI.openExternalLink(KOFI_URL)}
+            aria-label="YT-Forge website"
+            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => window.electronAPI.openExternalLink(LANDING_URL)}
           >
-            <Coffee className="h-4 w-4" />
+            <Logo className="w-[17px]! h-[11.2px]!" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-xs">
-          Buy me a coffee
+          YT-Forge website ↗
         </TooltipContent>
       </Tooltip>
     </header>

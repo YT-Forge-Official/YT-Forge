@@ -18,8 +18,11 @@ export default defineConfig({
         'electron-updater',
         'ffmpeg-static',
         'ffprobe-static',
-        // NOTE: electron-store is deliberately NOT external — v10 is ESM-only
-        // and require() of it crashes under Electron's Node, so vite bundles it.
+        // NOTE: electron-store is deliberately NOT listed as external. In
+        // practice vite leaves main.js's CommonJS require() of it verbatim
+        // rather than inlining it, so it resolves from node_modules at
+        // runtime — which is fine because it is a real dependency, not a
+        // devDependency. Do not "fix" this by adding it to external.
         ...builtinModules,
         ...builtinModules.map((m) => `node:${m}`),
       ],

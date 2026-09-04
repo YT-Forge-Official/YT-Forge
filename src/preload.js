@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // App version
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
 
+  // Anonymous usage ping (Settings -> Privacy)
+
   // Appearance — read synchronously at preload time so the renderer can paint
   // the right theme on its very first frame (no flash on startup).
   initialAppearance: ipcRenderer.sendSync("get-appearance-sync"),
