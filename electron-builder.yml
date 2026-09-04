@@ -22,6 +22,10 @@ mac:
   extraResources:
     - from: bin/yt-dlp_macos
       to: bin/yt-dlp_macos
+    # Clean GPLv3 FFmpeg; replaces ffmpeg-static's unredistributable
+    # --enable-nonfree darwin-arm64 build. See scripts/fetch-ffmpeg.mjs.
+    - from: bin/ffmpeg_macos
+      to: bin/ffmpeg_macos
 
 win:
   target:

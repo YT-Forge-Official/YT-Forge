@@ -96,6 +96,7 @@ out/
 /release/
 /bin/yt-dlp_linux
 /bin/yt-dlp_macos
+/bin/ffmpeg_macos
 *.dmg
 *.AppImage
 *.zip
