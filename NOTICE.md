@@ -46,24 +46,11 @@ aggregated with YT-Forge, not linked into it, and each remains under its own lic
 Bundled in `bin/`. Released into the public domain under The Unlicense.
 <https://github.com/yt-dlp/yt-dlp>
 
-### FFmpeg
+### FFmpeg and FFprobe
 
-Licensed under the **GNU General Public License, version 3 or later**, as every build YT-Forge
-ships is configured with `--enable-gpl --enable-version3`.
-Full licence text: <https://www.gnu.org/licenses/gpl-3.0.html>
+Bundled via the `ffmpeg-static` and `ffprobe-static` npm packages. The binaries are built with
+`--enable-gpl --enable-version3` and are therefore licensed under the **GNU General Public
+License, version 3 or later**. Full licence text: <https://www.gnu.org/licenses/gpl-3.0.html>
 Source code: <https://ffmpeg.org/download.html>
 
-| Platform | Build source |
-|---|---|
-| macOS (Apple Silicon) | <https://ffmpeg.martin-riedl.de> — fetched at build time by `scripts/fetch-ffmpeg.mjs` |
-| macOS (Intel), Windows, Linux | the `ffmpeg-static` npm package |
-
-macOS arm64 is fetched separately because `ffmpeg-static`'s darwin-arm64 build is compiled with
-`--enable-nonfree`, which FFmpeg's own documentation makes unredistributable. `fetch-ffmpeg.mjs`
-verifies the replacement carries no `--enable-nonfree` flag and fails the build otherwise.
-
-### FFprobe
-
-Bundled via the `ffprobe-static` npm package. The binaries are built with
-`--enable-gpl --enable-version3` and are likewise under the **GPL, version 3 or later**.
 The `ffprobe-static` npm wrapper itself is MIT licensed, Copyright (c) 2015 Josh Johnston.

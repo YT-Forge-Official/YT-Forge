@@ -8,30 +8,7 @@ const { spawn, execFile } = require("child_process");
 // Fix asar-packed paths: ffmpeg-static/ffprobe-static resolve inside .asar
 // which isn't executable. asarUnpack extracts them to .asar.unpacked.
 const fixAsar = (p) => p.replace('app.asar', 'app.asar.unpacked');
-
-// ffmpeg-static's darwin-arm64 build is compiled with --enable-nonfree, which
-// makes it unredistributable, so releases bundle a clean GPLv3 build at
-// bin/ffmpeg_macos instead (see scripts/fetch-ffmpeg.mjs and NOTICE.md).
-// Every other platform's ffmpeg-static build is plain GPLv3 and ships as-is;
-// ffmpeg-static also stays the fallback for dev machines that haven't run the
-// fetch script, where redistribution never happens.
-function resolveFfmpegPath() {
-  if (process.platform === 'darwin') {
-    const root = app.isPackaged ? process.resourcesPath : app.getAppPath();
-    const bundled = path.join(root, 'bin', 'ffmpeg_macos');
-    if (fs.existsSync(bundled)) return bundled;
-  }
-  // ffmpeg-static is excluded from macOS packages entirely, so on macOS this
-  // require can legitimately fail; never let that take the app down at boot.
-  try {
-    return fixAsar(require('ffmpeg-static'));
-  } catch (err) {
-    console.error('No bundled FFmpeg found, falling back to PATH:', err.message);
-    return 'ffmpeg';
-  }
-}
-
-const ffmpegPath = resolveFfmpegPath();
+const ffmpegPath = fixAsar(require('ffmpeg-static'));
 const ffprobePath = fixAsar(require('ffprobe-static').path);
 
 // Build env with ffmpeg+ffprobe directories on PATH so yt-dlp can find both.
