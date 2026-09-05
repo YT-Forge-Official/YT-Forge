@@ -16,7 +16,6 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Kbd } from '@/components/ui/kbd';
 import { shouldIgnoreShortcut } from '../hooks/useGlobalShortcuts';
 import {
   Trash2, FolderOpen, X, Settings, ExternalLink, CheckCircle2,
@@ -295,16 +294,9 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
       {/* Header */}
       <div className="flex-none border-b border-border/40 pb-4 mb-1">
         <div className="flex items-start gap-3">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={onBack} className="shrink-0 mt-0.5 h-8 w-8 text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
-              Back<Kbd>esc</Kbd>
-            </TooltipContent>
-          </Tooltip>
+          <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack} className="shrink-0 mt-0.5 h-8 w-8 text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
           <div className="flex-1 min-w-0">
             <h2
               className={`text-lg font-semibold truncate tracking-tight text-foreground${playlist.url ? ' cursor-pointer hover:underline' : ''}`}

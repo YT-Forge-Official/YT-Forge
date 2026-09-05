@@ -28,7 +28,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Kbd } from '@/components/ui/kbd';
 
 const formatTime = (totalSeconds) => {
   if (!totalSeconds || isNaN(totalSeconds) || totalSeconds < 0) return '00:00';
@@ -313,16 +312,9 @@ const PlaylistView = () => {
         {/* Header */}
         <div className="flex-none border-b border-border/40 pb-4 space-y-3.5">
           <div className="flex items-center gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
-                  <ArrowLeft className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
-                Back<Kbd>esc</Kbd>
-              </TooltipContent>
-            </Tooltip>
+            <Button variant="ghost" size="icon" aria-label="Back" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
             <div className="flex-1 min-w-0">
               <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight">{boundJob?.title || playlistDetails.title}</h2>
               <p className="text-xs text-muted-foreground truncate mt-0.5">
@@ -599,16 +591,9 @@ const PlaylistView = () => {
       {/* Header */}
       <div className="flex-none border-b border-border/40 pb-3.5 space-y-3">
         <div className="flex items-center gap-3">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="flex items-center gap-1.5 text-xs">
-              Back<Kbd>esc</Kbd>
-            </TooltipContent>
-          </Tooltip>
+          <Button variant="ghost" size="icon" aria-label="Back" onClick={goBackToHistory} className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold truncate tracking-tight text-foreground leading-tight flex items-center gap-2">
               <ListVideo className="h-4.5 w-4.5 text-muted-foreground shrink-0" />
