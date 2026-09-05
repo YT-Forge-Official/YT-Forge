@@ -126,6 +126,18 @@ const DetailsView = () => {
     return format ? !format.isH264 : false;
   }, [selectedQuality, selectedType, details.formats]);
 
+  // Purely advisory: above 4K the re-encode runs at roughly 25 minutes per
+  // minute of video. The conversion stays available — this only lets the user
+  // know what they're committing to before they start it.
+  const slowToConvert = useMemo(() => {
+    if (selectedType === 'mp3') return false;
+    const format = details.formats.find(f => String(f.itag) === selectedQuality);
+    // `slowToConvert` is absent on entries cached by an older build; fall back
+    // to the height we already have.
+    if (!format) return false;
+    return format.slowToConvert ?? format.height > 2160;
+  }, [selectedQuality, selectedType, details.formats]);
+
   const selectedFormat = useMemo(
     () => details.formats.find(f => String(f.itag) === selectedQuality),
     [details.formats, selectedQuality]
@@ -148,9 +160,12 @@ const DetailsView = () => {
   }, [selectedQuality, selectedType]);
 
   const progressText = useMemo(() => {
-    const { percent = 0, downloadedBytes = 0, totalBytes = 0, stage = 'starting' } = progress;
+    const { percent = 0, downloadedBytes = 0, totalBytes = 0, stage = 'starting', totalIsEstimate = false } = progress;
     if (stage === 'merging' || stage === 'processing') return stageLabels[stage];
-    if (totalBytes > 0) return `${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
+    // Fragmented sources have no content length, so the total is extrapolated
+    // from the fragments seen so far — say so rather than presenting a guess
+    // as a measurement.
+    if (totalBytes > 0) return `${percent.toFixed(1)}% — ${formatBytes(downloadedBytes)} / ${totalIsEstimate ? '~' : ''}${formatBytes(totalBytes)}`;
     if (percent > 0) return `${percent.toFixed(1)}%`;
     return 'Starting...';
   }, [progress]);
@@ -317,6 +332,13 @@ const DetailsView = () => {
                   </div>
                   <input type="checkbox" className="hidden" checked={convertToH264} onChange={(e) => setConvertToH264(e.target.checked)} />
                 </label>
+{/* 
+                {slowToConvert && convertToH264 && (
+                  <p className="text-[11px] leading-snug text-muted-foreground select-none border-t border-border/40 pt-2.5">
+                    Above 4K this runs at roughly <span className="text-amber-600/80 dark:text-amber-500/60">25 minutes per minute of video</span> —
+                    decoding, not encoding, is the bottleneck. You can cancel the conversion at any point and keep the downloaded file.
+                  </p>
+                )} */}
               </div>
             )}
 

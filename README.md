@@ -4,7 +4,7 @@
   <h1>YT-FORGE</h1>
 
   <p>
-    A fast, modern desktop YouTube downloader designed for creators and editors.
+    A fast, modern desktop universal video downloader designed for creators and editors.
   </p>
 
   <p>
@@ -17,7 +17,7 @@
 
 ## Overview
 
-**YT-FORGE** is a fast, lightweight desktop **YouTube video downloader** and **yt-dlp GUI wrapper** built on top of the powerful [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) engine.
+**YT-FORGE** is a fast, lightweight desktop **universal video downloader** and **yt-dlp GUI wrapper** built on top of the powerful [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) engine.
 
 It focuses on three things:
 
@@ -30,6 +30,9 @@ Unlike many downloaders, YT-FORGE prioritizes **H.264 video and AAC audio** form
 ---
 
 ## Features
+
+- **1,000+ Sites Supported**  
+  Downloads from YouTube, X, Instagram, TikTok, Reddit, and basically anywhere else supported by `yt-dlp`.
 
 - **Fast Downloads**  
   Powered by the battle-tested `yt-dlp` engine.
@@ -52,9 +55,9 @@ Unlike many downloaders, YT-FORGE prioritizes **H.264 video and AAC audio** form
 ## Interface
 
 <p align="center">
-  <img src="assets/screenshot1.png" width="49%" />
+  <img src="assets/DetailedViewPage.png" width="49%" />
   &nbsp;
-  <img src="assets/screenshot2.png" width="49%" />
+  <img src="assets/DownloadsPage.png" width="49%" />
 </p>
 
 ---
@@ -75,7 +78,7 @@ https://github.com/YT-Forge-Official/YT-Forge/releases/latest
 
 ## Security Notice
 
-Because this is an independent open-source application without enterprise code-signing certificates, your operating system may show a warning on first launch.
+Because this is an independent source-available application without enterprise code-signing certificates, your operating system may show a warning on first launch.
 
 **Windows:**  
 `More Info` → `Run Anyway`
@@ -109,8 +112,6 @@ It is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). In pla
 "YT-Forge", the YT-Forge name and the YT-Forge logo are trademarks of the author and are **not** licensed by the above. A permitted fork must be distributed under a different name and branding.
 
 For a commercial licence, contact the author.
-
-> **Note on earlier versions:** releases up to and including v1.0.8 were published under the MIT License, and those versions remain available under MIT. This change applies to subsequent versions only.
 
 ### Credits and third-party components
 

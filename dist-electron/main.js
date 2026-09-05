@@ -531,6 +531,7 @@ function isBasicPlayerResponse(formats) {
 }
 const codecAbsent = (c) => c === "none";
 const codecKnown = (c) => typeof c === "string" && c !== "none" && c !== "unknown";
+const H264_SLOW_CONVERT_HEIGHT = 2160;
 function isAudioOnlyFormat(f) {
   return codecAbsent(f.vcodec) || f.resolution === "audio only";
 }
@@ -608,7 +609,10 @@ function extractFormats(info) {
     // compatible — offering a needless re-encode is worse than skipping it,
     // and the download itself already prefers H.264 wherever it exists.
     isH264: f.isH264 || !f.known,
-    codecKnown: f.known
+    codecKnown: f.known,
+    // Not a restriction — the UI uses this to warn how long converting this
+    // rung will take before the user commits to it.
+    slowToConvert: f.displayHeight > H264_SLOW_CONVERT_HEIGHT
   })).sort((a, b) => b.height - a.height || b.fps - a.fps);
   const audioFormat = rawFormats.filter((f) => isAudioOnlyFormat(f) && !codecAbsent(f.acodec)).sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
   const audioSize = audioFormat ? reportedSize(audioFormat) || estimatedSize(audioFormat, duration) : 0;
@@ -965,7 +969,7 @@ function fetchImageToFile(url, filePath) {
   });
 }
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
-  const safeTitle = title.replace(/[\\/:"*?<>|]/g, "");
+  const safeTitle = safeFileStem(title, "jpg");
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: "Save Thumbnail",
     defaultPath: `${safeTitle}_thumbnail.jpg`,
@@ -982,6 +986,30 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
 });
 function outputTemplate(filePath) {
   return filePath.replace(/%/g, "%%");
+}
+function createWorkDir(filePath, jobKey) {
+  const preferred = path.join(path.dirname(filePath), `.yt-forge-${jobKey}`);
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch (e) {
+    try {
+      const fallback = fs.mkdtempSync(path.join(os.tmpdir(), "yt-forge-"));
+      console.warn("Falling back to system temp dir for intermediates:", e.message);
+      return fallback;
+    } catch (e2) {
+      console.error("No usable temp directory, downloading in place:", e2.message);
+      return null;
+    }
+  }
+}
+function removeWorkDir(workDir) {
+  if (!workDir) return;
+  try {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  } catch (e) {
+    console.error("Failed to remove work dir:", workDir, e.message);
+  }
 }
 function buildFormatSelector(quality, type) {
   if (type === "mp3") {
@@ -1133,6 +1161,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
     let ffmpegProcess = null;
     let keepOriginalOnCancel = false;
     let downloadStage = "starting";
+    let workDir = null;
     let downloadStartTime = Date.now();
     let totalPauseDuration = 0;
     let pauseStartTime = 0;
@@ -1249,14 +1278,21 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           console.error("Failed to delete existing file:", err);
         }
       }
+      workDir = createWorkDir(filePath, `${jobId || "job"}-${itemId || "single"}`);
       const args = [
         url,
         "--format",
         formatArg,
         "--format-sort",
         sortArg,
-        "--output",
-        outputTemplate(filePath),
+        ...workDir ? [
+          "--paths",
+          `home:${path.dirname(filePath)}`,
+          "--paths",
+          `temp:${workDir}`,
+          "--output",
+          outputTemplate(path.basename(filePath))
+        ] : ["--output", outputTemplate(filePath)],
         "--ffmpeg-location",
         ffmpegPath,
         "--newline",
@@ -1275,6 +1311,9 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       let lastPercent = -1;
       let stdoutBuf = "";
       let stageCount = 0;
+      let smoothedTotal = 0;
+      let maxDownloadedBytes = 0;
+      let totalIsEstimate = false;
       ytDlpProcess.stdout.on("data", (chunk) => {
         stdoutBuf += chunk.toString();
         const lines = stdoutBuf.split(/\r?\n/);
@@ -1290,6 +1329,9 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             }
             lastPercent = -1;
             speedWindow = [];
+            smoothedTotal = 0;
+            maxDownloadedBytes = 0;
+            totalIsEstimate = false;
           } else if (line.includes("[Merger]") || line.includes("[Mux]")) {
             downloadStage = "merging";
             if (!isPaused) sendProgress({ percent: -1, downloadedBytes: 0, totalBytes: 0, stage: "merging" });
@@ -1298,16 +1340,31 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             if (!isPaused) sendProgress({ percent: -1, downloadedBytes: 0, totalBytes: 0, stage: "processing" });
           }
           if (isPaused) return;
-          const downloadMatch = line.match(/\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)([KMGTi]+B)/i);
+          const downloadMatch = line.match(/\[download\]\s+([\d.]+)%\s+of\s+(~)?\s*([\d.]+)([KMGTi]+B)/i);
           let percentValue = null;
           let downloadedBytes = 0;
           let totalBytes = 0;
           if (downloadMatch) {
             percentValue = Math.min(100, parseFloat(downloadMatch[1]));
-            const totalValue = parseFloat(downloadMatch[2]);
-            const unit = downloadMatch[3];
-            totalBytes = sizeToBytes(totalValue, unit);
+            const isEstimate = !!downloadMatch[2];
+            const rawTotal = sizeToBytes(parseFloat(downloadMatch[3]), downloadMatch[4]);
+            totalIsEstimate = isEstimate;
+            if (!isEstimate) {
+              totalBytes = rawTotal;
+              smoothedTotal = rawTotal;
+            } else if (smoothedTotal === 0) {
+              totalBytes = smoothedTotal = rawTotal;
+            } else {
+              smoothedTotal = Math.round(smoothedTotal * 0.995 + rawTotal * 5e-3);
+              totalBytes = smoothedTotal;
+            }
             downloadedBytes = Math.round(totalBytes * (percentValue / 100));
+            if (downloadedBytes < maxDownloadedBytes) {
+              downloadedBytes = maxDownloadedBytes;
+            } else {
+              maxDownloadedBytes = downloadedBytes;
+            }
+            if (totalBytes < downloadedBytes) totalBytes = downloadedBytes;
           } else {
             const bare = line.match(/(?:^|\s)(\d{1,3}\.?\d*)%/);
             if (bare) percentValue = Math.min(100, parseFloat(bare[1]));
@@ -1346,6 +1403,9 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
               downloadedBytes,
               totalBytes,
               stage: downloadStage,
+              // Tells the UI to render the total as approximate. On fragmented
+              // sources it is an extrapolation, not a content length.
+              totalIsEstimate,
               speed: currentSpeed,
               eta: currentEta,
               elapsed: elapsedSec
@@ -1378,7 +1438,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       if (convertToH264 && type === "mp4" && !isCancelled) {
         downloadStage = "converting";
         speedWindow = [];
-        const tempOutput = filePath + ".tmp.mp4";
+        const tempOutput = workDir ? path.join(workDir, path.basename(filePath) + ".tmp.mp4") : filePath + ".tmp.mp4";
         sendProgress({ percent: 0, downloadedBytes: 0, totalBytes: 0, stage: "converting" });
         const sourceAudio = await probeAudioCodec(filePath);
         const audioArgs = MP4_SAFE_AUDIO.has(sourceAudio) ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k"];
@@ -1513,12 +1573,27 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           }
         }
       }
+      removeWorkDir(workDir);
+      workDir = null;
       activeCtl = null;
     }
   });
 }
+const MAX_FILENAME_BYTES = 255;
+const FILENAME_RESERVE_BYTES = 16;
+function safeFileStem(title, ext) {
+  let stem = String(title || "video").replace(/[\\/:"*?<>|]/g, "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+  const budget = MAX_FILENAME_BYTES - FILENAME_RESERVE_BYTES - Buffer.byteLength(`.${ext}`, "utf8");
+  if (Buffer.byteLength(stem, "utf8") > budget) {
+    const buf = Buffer.from(stem, "utf8").subarray(0, budget);
+    stem = buf.toString("utf8").replace(/\ufffd+$/, "").trimEnd();
+  }
+  stem = stem.replace(/[. ]+$/, "");
+  if (!stem || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) stem = `video${stem ? "_" + stem : ""}`;
+  return stem;
+}
 function resolveOutputPath(targetDir, title, ext, allowDuplicates) {
-  const safeTitle = title.replace(/[\\/:"*?<>|]/g, "");
+  const safeTitle = safeFileStem(title, ext);
   let filePath = path.join(targetDir, `${safeTitle}.${ext}`);
   if (fs.existsSync(filePath) && allowDuplicates) {
     let counter = 1;
@@ -1683,8 +1758,8 @@ async function processQueue() {
 ipcMain.handle("get-queue", () => downloadQueue.map(serializeJob));
 ipcMain.handle("queue-video", async (event, options) => {
   const { videoId, url, quality, qualityLabel, type, title, thumbnailUrl, convertToH264, sizeBytes, meta } = options;
-  const safeTitle = (title || "video").replace(/[\\/:"*?<>|]/g, "");
   const ext = type === "mp4" ? "mp4" : "mp3";
+  const safeTitle = safeFileStem(title, ext);
   const dialogResult = await dialog.showSaveDialog(mainWindow, {
     title: `Save ${type.toUpperCase()}`,
     defaultPath: `${safeTitle}.${ext}`,

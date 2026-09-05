@@ -702,6 +702,22 @@ function isBasicPlayerResponse(formats) {
 const codecAbsent = (c) => c === 'none';
 const codecKnown = (c) => typeof c === 'string' && c !== 'none' && c !== 'unknown';
 
+/**
+ * Height above which the H.264 conversion gets an explicit slowness warning.
+ *
+ * Measured on an M4 with a real 8K AV1 60fps clip: AV1 decode alone runs at
+ * 0.17x realtime and decode + `libx264 -preset medium -crf 18` at 0.04x —
+ * roughly 25 minutes of work per minute of video. Decoding dominates, so no
+ * encoder preset rescues it, and VideoToolbox refuses to encode H.264 above 4K
+ * at all (`cannot create compression session: -12903`).
+ *
+ * This is deliberately only a warning. The conversion stays available at any
+ * resolution: the progress UI reports live speed and ETA, and cancelling
+ * during the convert stage offers to keep the already-downloaded original, so
+ * a user who changes their mind loses nothing but time.
+ */
+const H264_SLOW_CONVERT_HEIGHT = 2160;
+
 /** yt-dlp marks audio-only streams with resolution === 'audio only'. */
 function isAudioOnlyFormat(f) {
   return codecAbsent(f.vcodec) || f.resolution === 'audio only';
@@ -815,6 +831,9 @@ function extractFormats(info) {
       // and the download itself already prefers H.264 wherever it exists.
       isH264: f.isH264 || !f.known,
       codecKnown: f.known,
+      // Not a restriction — the UI uses this to warn how long converting this
+      // rung will take before the user commits to it.
+      slowToConvert: f.displayHeight > H264_SLOW_CONVERT_HEIGHT,
     }))
     .sort((a, b) => (b.height - a.height) || (b.fps - a.fps));
 
@@ -1311,7 +1330,7 @@ function fetchImageToFile(url, filePath) {
 }
 
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
-  const safeTitle = title.replace(/[\\/:"*?<>|]/g, '');
+  const safeTitle = safeFileStem(title, 'jpg');
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: 'Save Thumbnail', defaultPath: `${safeTitle}_thumbnail.jpg`,
     buttonLabel: 'Save Image', filters: [{ name: 'JPEG Image', extensions: ['jpg'] }]
@@ -1333,6 +1352,51 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
  */
 function outputTemplate(filePath) {
   return filePath.replace(/%/g, '%%');
+}
+
+/**
+ * A private scratch directory for one download, created next to the
+ * destination file.
+ *
+ * yt-dlp writes every intermediate straight into the output directory — the
+ * separate video and audio streams (`Title.f399.mp4`), each in-flight fragment
+ * (`.part-Frag12`), and the pre-merge container. With
+ * `--concurrent-fragments` that is a handful of files materialising and
+ * vanishing in the user's Downloads folder for the whole download, which looks
+ * exactly like the app is thrashing.
+ *
+ * It has to sit on the SAME volume as the destination: yt-dlp finishes with a
+ * `[MoveFiles]` step, which is an instant rename within a volume but a full
+ * byte copy across one — and on an external drive that would silently double
+ * both the time and the peak disk usage. A dot prefix keeps it out of Finder.
+ */
+function createWorkDir(filePath, jobKey) {
+  const preferred = path.join(path.dirname(filePath), `.yt-forge-${jobKey}`);
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch (e) {
+    // Read-only or otherwise hostile destination — fall back to the system
+    // temp dir and accept the possible cross-volume copy.
+    try {
+      const fallback = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-forge-'));
+      console.warn('Falling back to system temp dir for intermediates:', e.message);
+      return fallback;
+    } catch (e2) {
+      console.error('No usable temp directory, downloading in place:', e2.message);
+      return null;
+    }
+  }
+}
+
+/** Best-effort removal of a work directory and anything left inside it. */
+function removeWorkDir(workDir) {
+  if (!workDir) return;
+  try {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  } catch (e) {
+    console.error('Failed to remove work dir:', workDir, e.message);
+  }
 }
 
 /**
@@ -1559,6 +1623,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
     let ffmpegProcess = null;
     let keepOriginalOnCancel = false;
     let downloadStage = 'starting';
+    let workDir = null;
 
     let downloadStartTime = Date.now();
     let totalPauseDuration = 0;
@@ -1657,11 +1722,21 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         }
       }
 
+      // Everything intermediate happens out of sight, then yt-dlp moves the
+      // single finished file into place. `--paths` is silently ignored when
+      // --output is absolute, so the destination has to be given as `home:`
+      // and the output template reduced to a bare filename.
+      workDir = createWorkDir(filePath, `${jobId || 'job'}-${itemId || 'single'}`);
+
       const args = [
         url,
         '--format', formatArg,
         '--format-sort', sortArg,
-        '--output', outputTemplate(filePath),
+        ...(workDir
+          ? ['--paths', `home:${path.dirname(filePath)}`,
+             '--paths', `temp:${workDir}`,
+             '--output', outputTemplate(path.basename(filePath))]
+          : ['--output', outputTemplate(filePath)]),
         '--ffmpeg-location', ffmpegPath,
         '--newline',
         ...getAuthArgs(url),
@@ -1692,6 +1767,12 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       let lastPercent = -1;
       let stdoutBuf = '';
       let stageCount = 0;
+      // Per-stream: smoothed size estimate and the high-water mark of bytes
+      // actually fetched. Both reset when a new "Destination:" line starts the
+      // next stream, since its totals are unrelated to the previous one's.
+      let smoothedTotal = 0;
+      let maxDownloadedBytes = 0;
+      let totalIsEstimate = false;
 
       ytDlpProcess.stdout.on('data', (chunk) => {
         stdoutBuf += chunk.toString();
@@ -1709,6 +1790,9 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             }
             lastPercent = -1;
             speedWindow = [];
+            smoothedTotal = 0;
+            maxDownloadedBytes = 0;
+            totalIsEstimate = false;
           } else if (line.includes('[Merger]') || line.includes('[Mux]')) {
             downloadStage = 'merging';
             if (!isPaused) sendProgress({ percent: -1, downloadedBytes: 0, totalBytes: 0, stage: 'merging' });
@@ -1720,17 +1804,53 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           if (isPaused) return;
 
           // [download]  12.3% of   54.23MiB at  3.10MiB/s ETA 00:15
-          const downloadMatch = line.match(/\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)([KMGTi]+B)/i);
+          // [download]  12.3% of ~ 54.23MiB at ... (frag 25/59)
+          //
+          // The tilde marks a GUESS. On a fragmented download (HLS/DASH — most
+          // of X, Dailymotion, PornHub) yt-dlp has no content length up front,
+          // so it extrapolates the total from the fragments seen so far and
+          // re-guesses on every line. Reported verbatim that total swings
+          // wildly — 1.13 GB one second, 916 MB the next — and since
+          // "downloaded" was derived from it, the bytes and the ETA lurched
+          // backwards too.
+          const downloadMatch = line.match(/\[download\]\s+([\d.]+)%\s+of\s+(~)?\s*([\d.]+)([KMGTi]+B)/i);
           let percentValue = null;
           let downloadedBytes = 0;
           let totalBytes = 0;
 
           if (downloadMatch) {
             percentValue = Math.min(100, parseFloat(downloadMatch[1]));
-            const totalValue = parseFloat(downloadMatch[2]);
-            const unit = downloadMatch[3];
-            totalBytes = sizeToBytes(totalValue, unit);
+            const isEstimate = !!downloadMatch[2];
+            const rawTotal = sizeToBytes(parseFloat(downloadMatch[3]), downloadMatch[4]);
+
+            totalIsEstimate = isEstimate;
+
+            if (!isEstimate) {
+              totalBytes = rawTotal;
+              smoothedTotal = rawTotal;
+            } else if (smoothedTotal === 0) {
+              totalBytes = smoothedTotal = rawTotal;
+            } else {
+              // Heavy exponential smoothing. Measured against 648 real progress
+              // lines from a fragmented download: raw swung by up to 53%
+              // between updates, 0.85 still left 29%, 0.995 leaves 2.3% — one
+              // visible movement across the whole download. Tracking the guess
+              // faster is counterproductive, because the noisiest estimates are
+              // the earliest ones.
+              smoothedTotal = Math.round(smoothedTotal * 0.995 + rawTotal * 0.005);
+              totalBytes = smoothedTotal;
+            }
+
             downloadedBytes = Math.round(totalBytes * (percentValue / 100));
+            // Bytes already on disk cannot un-download themselves. Clamping
+            // keeps the readout and the speed window monotonic even while the
+            // total behind them is still settling.
+            if (downloadedBytes < maxDownloadedBytes) {
+              downloadedBytes = maxDownloadedBytes;
+            } else {
+              maxDownloadedBytes = downloadedBytes;
+            }
+            if (totalBytes < downloadedBytes) totalBytes = downloadedBytes;
           } else {
             const bare = line.match(/(?:^|\s)(\d{1,3}\.?\d*)%/);
             if (bare) percentValue = Math.min(100, parseFloat(bare[1]));
@@ -1775,6 +1895,9 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
               downloadedBytes,
               totalBytes,
               stage: downloadStage,
+              // Tells the UI to render the total as approximate. On fragmented
+              // sources it is an extrapolation, not a content length.
+              totalIsEstimate,
               speed: currentSpeed,
               eta: currentEta,
               elapsed: elapsedSec
@@ -1817,7 +1940,11 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       if (convertToH264 && type === 'mp4' && !isCancelled) {
         downloadStage = 'converting';
         speedWindow = [];
-        const tempOutput = filePath + '.tmp.mp4';
+        // Keep the half-written re-encode beside the fragments rather than in
+        // the user's folder, for the same reason.
+        const tempOutput = workDir
+          ? path.join(workDir, path.basename(filePath) + '.tmp.mp4')
+          : filePath + '.tmp.mp4';
         sendProgress({ percent: 0, downloadedBytes: 0, totalBytes: 0, stage: 'converting' });
 
         // Copying the audio is free and lossless, but only when the stream is
@@ -1962,14 +2089,57 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           try { fs.unlinkSync(filePath + '.tmp.mp4'); } catch (e) { }
         }
       }
+      // The work dir goes on every path — success, failure, cancel — or a
+      // killed download would leave a hidden folder of fragments behind
+      // forever.
+      removeWorkDir(workDir);
+      workDir = null;
       activeCtl = null;
     }
   });
 }
 
+// Filesystems cap a single name at 255 *bytes*, not characters (APFS, ext4,
+// NTFS all land there). Leave room for the extension and a " (12)" duplicate
+// suffix.
+const MAX_FILENAME_BYTES = 255;
+const FILENAME_RESERVE_BYTES = 16;
+
+/**
+ * Sanitise a video title into a filename stem that the filesystem will accept.
+ *
+ * The byte budget is not paranoia. On YouTube a title is a title, but X, Reddit
+ * and Mastodon use the whole post as one — a single 280-character tweet with a
+ * couple of emoji is 400+ bytes, and writing it threw ENAMETOOLONG before the
+ * download had a chance to start.
+ */
+function safeFileStem(title, ext) {
+  let stem = String(title || 'video')
+    .replace(/[\\/:"*?<>|]/g, '')
+    // Control characters and newlines are legal in some filesystems and awful
+    // in all of them; post text routinely contains newlines.
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const budget = MAX_FILENAME_BYTES - FILENAME_RESERVE_BYTES - Buffer.byteLength(`.${ext}`, 'utf8');
+  if (Buffer.byteLength(stem, 'utf8') > budget) {
+    // Cut on a UTF-8 boundary, then again on a whole code point, so a
+    // multi-byte character or emoji never ends up half-written.
+    const buf = Buffer.from(stem, 'utf8').subarray(0, budget);
+    stem = buf.toString('utf8').replace(/\ufffd+$/, '').trimEnd();
+  }
+
+  // Windows rejects trailing dots and spaces, and reserves a handful of device
+  // names; an empty stem would produce a bare ".mp4" dotfile.
+  stem = stem.replace(/[. ]+$/, '');
+  if (!stem || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) stem = `video${stem ? '_' + stem : ''}`;
+  return stem;
+}
+
 /** Resolve the output path inside a target directory, handling duplicates. */
 function resolveOutputPath(targetDir, title, ext, allowDuplicates) {
-  const safeTitle = title.replace(/[\\/:"*?<>|]/g, '');
+  const safeTitle = safeFileStem(title, ext);
   let filePath = path.join(targetDir, `${safeTitle}.${ext}`);
   if (fs.existsSync(filePath) && allowDuplicates) {
     let counter = 1;
@@ -2163,8 +2333,10 @@ ipcMain.handle('get-queue', () => downloadQueue.map(serializeJob));
 
 ipcMain.handle('queue-video', async (event, options) => {
   const { videoId, url, quality, qualityLabel, type, title, thumbnailUrl, convertToH264, sizeBytes, meta } = options;
-  const safeTitle = (title || 'video').replace(/[\\/:"*?<>|]/g, '');
   const ext = type === 'mp4' ? 'mp4' : 'mp3';
+  // Same byte budget as resolveOutputPath: the dialog's default name becomes
+  // the real filename, so an over-long one fails at write time, not here.
+  const safeTitle = safeFileStem(title, ext);
 
   const dialogResult = await dialog.showSaveDialog(mainWindow, {
     title: `Save ${type.toUpperCase()}`,

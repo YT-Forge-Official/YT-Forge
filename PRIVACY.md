@@ -10,7 +10,7 @@ your data to go.
 
 Nothing about you or your downloads is ever sent anywhere.
 
-The app does make network requests, because a YouTube downloader has to. All of
+The app does make network requests, because a video downloader has to. All of
 them are listed below, and all of them can be verified by reading the source.
 
 ## Requests YT-Forge makes at startup
