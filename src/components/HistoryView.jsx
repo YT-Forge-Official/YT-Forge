@@ -86,6 +86,8 @@ const ActiveDownloadCard = ({ job }) => {
   const speed = progress.speed || 0;
   const stage = progress.stage || 'starting';
 
+  const isConverting = isDownloading && stage === 'converting';
+
   const isPlaylist = job.kind === 'playlist';
   const items = job.items || [];
   const doneCount = items.filter(it => ['completed', 'error', 'skipped', 'cancelled'].includes(it.status)).length;
@@ -208,24 +210,52 @@ const ActiveDownloadCard = ({ job }) => {
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {job.status === 'queued' ? 'Remove from queue?' : isPlaylist ? 'Cancel playlist download?' : 'Cancel download?'}
+                {isConverting
+                  ? 'Cancel conversion?'
+                  : job.status === 'queued' ? 'Remove from queue?' : isPlaylist ? 'Cancel playlist download?' : 'Cancel download?'}
               </AlertDialogTitle>
               <AlertDialogDescription>
-                {job.status === 'queued'
-                  ? 'This download will be removed from the queue before it starts.'
-                  : isPlaylist
-                    ? 'The current video will be stopped and the rest of the playlist will be cancelled. Videos already completed will be kept.'
-                    : 'The download will be stopped and the partial file will be deleted.'}
+                {isConverting
+                  ? (isPlaylist
+                      ? 'The current video has already been downloaded. You can stop the conversion and keep the original (VP9 / AV1) file, or delete it. Either way the rest of the playlist is cancelled and completed videos are kept.'
+                      : 'The video has already been downloaded. You can stop the conversion and keep the original (VP9 / AV1) file, or delete everything altogether.')
+                  : job.status === 'queued'
+                    ? 'This download will be removed from the queue before it starts.'
+                    : isPlaylist
+                      ? 'The current video will be stopped and the rest of the playlist will be cancelled. Videos already completed will be kept.'
+                      : 'The download will be stopped and the partial file will be deleted.'}
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep it</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => window.electronAPI.cancelJob({ jobId: job.id })}
-                className="bg-destructive text-white hover:bg-destructive/80"
-              >
-                {job.status === 'queued' ? 'Remove' : 'Cancel Download'}
-              </AlertDialogAction>
+            <AlertDialogFooter className={isConverting ? 'sm:justify-between w-full' : ''}>
+              {isConverting ? (
+                <>
+                  <AlertDialogCancel>Keep converting</AlertDialogCancel>
+                  <div className="flex items-center gap-2">
+                    <AlertDialogAction
+                      className="bg-transparent border border-border text-foreground hover:bg-secondary"
+                      onClick={() => window.electronAPI.cancelJob({ jobId: job.id, keepOriginal: true })}
+                    >
+                      Stop, keep original
+                    </AlertDialogAction>
+                    <AlertDialogAction
+                      onClick={() => window.electronAPI.cancelJob({ jobId: job.id, keepOriginal: false })}
+                      className="bg-destructive text-white hover:bg-destructive/80"
+                    >
+                      Delete all
+                    </AlertDialogAction>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <AlertDialogCancel>Keep it</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => window.electronAPI.cancelJob({ jobId: job.id, keepOriginal: false })}
+                    className="bg-destructive text-white hover:bg-destructive/80"
+                  >
+                    {job.status === 'queued' ? 'Remove' : 'Cancel Download'}
+                  </AlertDialogAction>
+                </>
+              )}
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
