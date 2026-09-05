@@ -20,7 +20,7 @@ const Header = () => {
         <Input
           ref={urlInputRef}
           type="text"
-          placeholder="Paste a YouTube URL..."
+          placeholder="Paste a video URL..."
           value={url}
           onChange={(e) => handleUrlChange(e.target.value)}
           onFocus={() => setUrlFocused(true)}

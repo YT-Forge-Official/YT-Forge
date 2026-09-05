@@ -76,7 +76,10 @@ const DetailsView = () => {
   const [selectedQuality, setSelectedQuality] = useState(
     String(details.formats[0]?.itag || "")
   );
-  const [selectedType, setSelectedType] = useState("mp4");
+  // Sources with no video track at all (SoundCloud, Bandcamp, podcast feeds)
+  // only have one sensible output — offering MP4 would produce a soundtrack
+  // sealed in a video container.
+  const [selectedType, setSelectedType] = useState(details.isAudioOnly ? "mp3" : "mp4");
   const [convertToH264, setConvertToH264] = useState(false);
   const [jobId, setJobId] = useState(boundJobId);
 
@@ -84,6 +87,16 @@ const DetailsView = () => {
   useEffect(() => {
     setJobId(boundJobId);
   }, [boundJobId]);
+
+  // This view stays mounted when the user fetches another link straight from
+  // the details screen, so the selectors have to follow the new video rather
+  // than keep the previous one's choices. Without this, arriving at an
+  // audio-only source with MP4 still selected leaves the format dropdown
+  // pointing at an option that is no longer in the list.
+  useEffect(() => {
+    if (details.isAudioOnly) setSelectedType('mp3');
+    setSelectedQuality(String(details.formats[0]?.itag || ''));
+  }, [details.videoId, details.webpageUrl, details.isAudioOnly, details.formats]);
 
   const job = useMemo(() => jobs.find(j => j.id === jobId) || null, [jobs, jobId]);
   const result = jobId ? jobResults[jobId] : null;
@@ -144,10 +157,14 @@ const DetailsView = () => {
 
   const handleDownload = async () => {
     const qualityLabel = selectedFormat?.quality;
-    // Canonical URL — the search bar may have changed since this video was fetched
-    const canonicalUrl = details.videoId
-      ? `https://www.youtube.com/watch?v=${details.videoId}`
-      : '';
+    // Canonical URL — the search bar may have changed since this video was
+    // fetched, so use the page URL yt-dlp reported for THIS video.
+    //
+    // Do not rebuild this from `videoId`: outside YouTube the id is
+    // extractor-local (PornHub's is '65a46f8847bef'), and pasting it into a
+    // youtube.com/watch link produced a dead URL that failed every download
+    // while metadata and thumbnail still loaded fine.
+    const canonicalUrl = details.webpageUrl || details.sourceUrl || '';
 
     const options = {
       videoId: details.videoId,
@@ -250,7 +267,7 @@ const DetailsView = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="mp4">MP4 (Video)</SelectItem>
+                  {!details.isAudioOnly && <SelectItem value="mp4">MP4 (Video)</SelectItem>}
                   <SelectItem value="mp3">MP3 (Audio)</SelectItem>
                 </SelectContent>
               </Select>

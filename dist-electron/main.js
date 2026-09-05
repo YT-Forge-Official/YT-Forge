@@ -468,7 +468,16 @@ ipcMain.handle("check-youtube-auth", async () => {
   }
   return false;
 });
-function getAuthArgs() {
+function isYouTubeUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be" || host.endsWith(".youtu.be");
+  } catch (e) {
+    return false;
+  }
+}
+function getAuthArgs(url) {
+  if (url !== void 0 && !isYouTubeUrl(url)) return [];
   if (fs.existsSync(COOKIES_PATH)) {
     return ["--cookies", COOKIES_PATH];
   }
@@ -479,7 +488,7 @@ async function runYtDlpJson(url, extraArgs = [], silent = false) {
     const proc = spawn(ytDlpBinaryPath, [
       url,
       "-J",
-      ...getAuthArgs(),
+      ...getAuthArgs(url),
       ...BASE_ARGS,
       ...extraArgs
     ], { env: getYtDlpEnv(), windowsHide: true });
@@ -520,20 +529,49 @@ function isBasicPlayerResponse(formats) {
   const adaptiveVideo = formats.some((f) => f.vcodec && f.vcodec !== "none" && f.acodec === "none");
   return !adaptiveVideo;
 }
+const codecAbsent = (c) => c === "none";
+const codecKnown = (c) => typeof c === "string" && c !== "none" && c !== "unknown";
+function isAudioOnlyFormat(f) {
+  return codecAbsent(f.vcodec) || f.resolution === "audio only";
+}
+function formatHeight(f) {
+  if (f.height > 0) return f.height;
+  for (const s of [f.resolution, f.format_note, f.format_id]) {
+    if (typeof s !== "string") continue;
+    const wxh = s.match(/^(\d+)\s*[x×]\s*(\d+)$/);
+    if (wxh) return parseInt(wxh[2], 10);
+    const p = s.match(/(\d{3,5})\s*p/i);
+    if (p) return parseInt(p[1], 10);
+  }
+  return 0;
+}
+function reportedSize(f) {
+  return f.filesize || f.filesize_approx || 0;
+}
+function estimatedSize(f, durationSec) {
+  const kbps = f.tbr || (f.vbr || 0) + (f.abr || 0);
+  if (kbps > 0 && durationSec > 0) return Math.round(kbps * 1e3 * durationSec / 8);
+  return 0;
+}
 function extractFormats(info) {
+  const duration = info.duration || 0;
   const heightMap = {};
-  (info.formats || []).forEach((f) => {
-    const rawH = f.height || 0;
+  const rawFormats = info.formats || [];
+  rawFormats.forEach((f) => {
+    if (isAudioOnlyFormat(f)) return;
+    const rawH = formatHeight(f);
     const rawW = f.width || 0;
     const displayH = rawW > 0 && rawH > 0 ? Math.min(rawW, rawH) : rawH;
-    if (!displayH || displayH < 240) return;
-    if (!f.vcodec || f.vcodec === "none") return;
-    const size = f.filesize || f.filesize_approx || 0;
+    if (!displayH) return;
+    const vcodec = f.vcodec;
+    const known = codecKnown(vcodec);
+    const size = reportedSize(f);
+    const guessedSize = size || estimatedSize(f, duration);
     const fps = f.fps || 30;
-    const isAdaptive = f.acodec === "none";
-    const isH264 = f.vcodec.startsWith("avc") || f.vcodec === "h264";
-    const isVP9 = f.vcodec.startsWith("vp09") || f.vcodec.startsWith("vp9");
-    const isAV1 = f.vcodec.startsWith("av01");
+    const isAdaptive = codecAbsent(f.acodec);
+    const isH264 = known && (vcodec.startsWith("avc") || vcodec.startsWith("h264"));
+    const isVP9 = known && (vcodec.startsWith("vp09") || vcodec.startsWith("vp9"));
+    const isAV1 = known && vcodec.startsWith("av01");
     const key = `${displayH}_${fps > 30 ? fps : 30}`;
     const codecScore = isH264 ? 2 : isVP9 ? 1 : 0;
     const score = (isAdaptive ? 4 : 0) + codecScore;
@@ -547,45 +585,58 @@ function extractFormats(info) {
         // actual yt-dlp height — for format filter
         fps,
         size,
+        guessedSize,
         isAdaptive,
         isH264,
         isVP9,
-        isAV1
+        isAV1,
+        known
       };
     }
   });
-  const uniqueFormats = Object.values(heightMap).map((f) => ({
+  const rungs = Object.values(heightMap);
+  const above240 = rungs.filter((f) => f.displayHeight >= 240);
+  const uniqueFormats = (above240.length > 0 ? above240 : rungs).map((f) => ({
     itag: `${f.ytdlpHeight}`,
     // actual yt-dlp height, used in download format arg
-    quality: `${f.displayHeight}p${f.fps > 30 ? f.fps : ""}${f.isH264 ? "" : f.isVP9 ? " (VP9)" : f.isAV1 ? " (AV1)" : ""}`,
+    quality: `${f.displayHeight}p${f.fps > 30 ? f.fps : ""}${f.isVP9 ? " (VP9)" : f.isAV1 ? " (AV1)" : ""}`,
     height: f.displayHeight,
     fps: f.fps > 30 ? f.fps : 30,
-    size: f.size,
-    sizeFormatted: f.size > 0 ? formatBytes(f.size) : "N/A",
-    isH264: f.isH264
+    size: f.guessedSize,
+    sizeFormatted: f.guessedSize > 0 ? formatBytes(f.guessedSize) : "N/A",
+    // Drives the "convert to H.264" offer. An unknown codec is assumed
+    // compatible — offering a needless re-encode is worse than skipping it,
+    // and the download itself already prefers H.264 wherever it exists.
+    isH264: f.isH264 || !f.known,
+    codecKnown: f.known
   })).sort((a, b) => b.height - a.height || b.fps - a.fps);
-  const audioFormat = (info.formats || []).filter((f) => f.acodec !== "none" && f.vcodec === "none").sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-  const audioSize = (audioFormat == null ? void 0 : audioFormat.filesize) || (audioFormat == null ? void 0 : audioFormat.filesize_approx) || 0;
+  const audioFormat = rawFormats.filter((f) => isAudioOnlyFormat(f) && !codecAbsent(f.acodec)).sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+  const audioSize = audioFormat ? reportedSize(audioFormat) || estimatedSize(audioFormat, duration) : 0;
+  const isAudioOnly = uniqueFormats.length === 0 && !!audioFormat && rawFormats.every(isAudioOnlyFormat);
   return {
-    formats: uniqueFormats.length > 0 ? uniqueFormats : [{ itag: "best", quality: "Best", height: 0, size: 0, sizeFormatted: "N/A", isH264: true }],
-    audioSize
+    formats: uniqueFormats.length > 0 ? uniqueFormats : isAudioOnly ? [] : [{ itag: "best", quality: "Best", height: 0, size: 0, sizeFormatted: "N/A", isH264: true, codecKnown: false }],
+    audioSize,
+    isAudioOnly
   };
 }
 async function fetchVideoInfoWithRetry(url, silent) {
-  let info = await runYtDlpJson(url, [], silent);
-  if (isBasicPlayerResponse(info.formats)) {
-    try {
-      info = await runYtDlpJson(url, ["--extractor-args", "youtube:player_client=default,android"], silent);
-    } catch (retryErr) {
-      console.warn("Player-client retry failed, using initial result:", retryErr.message);
-    }
+  const info = await runYtDlpJson(url, [], silent);
+  if (!isYouTubeUrl(url) || !isBasicPlayerResponse(info.formats)) return info;
+  try {
+    const retried = await runYtDlpJson(url, ["--extractor-args", "youtube:player_client=default,android"], silent);
+    const before = (info.formats || []).length;
+    const after = (retried.formats || []).length;
+    return after >= before ? retried : info;
+  } catch (retryErr) {
+    console.warn("Player-client retry failed, using initial result:", retryErr.message);
+    return info;
   }
-  return info;
 }
 const VIDEO_INFO_TTL_MS = 10 * 60 * 1e3;
 const VIDEO_INFO_MAX = 50;
 const videoInfoCache = /* @__PURE__ */ new Map();
 function videoKeyFromUrl(url) {
+  if (!isYouTubeUrl(url)) return url;
   try {
     const u = new URL(url);
     const v = u.searchParams.get("v");
@@ -610,8 +661,8 @@ ipcMain.handle("get-video-info", async (event, url) => {
   try {
     console.log("Fetching video info for:", url);
     const info = await fetchVideoInfoWithRetry(url, false);
-    const { formats, audioSize } = extractFormats(info);
-    console.log("Available qualities:", formats.map((f) => f.quality).join(", "));
+    const { formats, audioSize, isAudioOnly } = extractFormats(info);
+    console.log("Available qualities:", isAudioOnly ? "audio only" : formats.map((f) => f.quality).join(", "));
     const payload = {
       success: true,
       videoId: info.id,
@@ -622,13 +673,20 @@ ipcMain.handle("get-video-info", async (event, url) => {
       duration: info.duration || 0,
       uploader: info.uploader || info.channel || "",
       audioSize,
-      audioSizeFormatted: formatBytes(audioSize)
+      audioSizeFormatted: formatBytes(audioSize),
+      isAudioOnly,
+      // The URL the download must actually use. yt-dlp ids are only
+      // round-trippable back into a URL on YouTube; everywhere else the id is
+      // extractor-local ('65a46f8847bef') and rebuilding a link from it
+      // produces a dead one.
+      webpageUrl: info.webpage_url || info.original_url || url,
+      extractor: info.extractor_key || info.extractor || ""
     };
     if (videoInfoCache.size >= VIDEO_INFO_MAX) {
       videoInfoCache.delete(videoInfoCache.keys().next().value);
     }
     videoInfoCache.set(cacheKey, { t: Date.now(), payload });
-    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize });
+    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize, isAudioOnly });
     return payload;
   } catch (error) {
     if (error.message === "AGE_RESTRICTED") {
@@ -644,25 +702,32 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
   }
   try {
     let cleanUrl = url;
-    try {
-      const u = new URL(url);
-      const listId = u.searchParams.get("list");
-      if (listId) {
-        cleanUrl = `https://www.youtube.com/playlist?list=${listId}`;
+    if (isYouTubeUrl(url)) {
+      try {
+        const listId = new URL(url).searchParams.get("list");
+        if (listId) cleanUrl = `https://www.youtube.com/playlist?list=${listId}`;
+      } catch (e) {
       }
-    } catch (e) {
     }
     console.log("Fetching playlist info for:", cleanUrl);
     const info = await runYtDlpJson(cleanUrl, ["--flat-playlist", "--yes-playlist"]);
     const entries = info.entries || [];
-    const videos = entries.filter((v) => v.id && v.title && v.title !== "[Private video]" && v.title !== "[Deleted video]").map((v) => ({
-      id: v.id,
-      url: v.url || `https://www.youtube.com/watch?v=${v.id}`,
-      title: v.title,
-      duration: v.duration || 0,
-      uploader: v.uploader || v.channel || info.uploader || info.channel || "Unknown",
-      thumbnail: v.thumbnails && v.thumbnails.length > 0 ? v.thumbnails[v.thumbnails.length - 1].url : `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`
-    }));
+    const fromYouTube = isYouTubeUrl(cleanUrl);
+    const videos = entries.filter((v) => v.id && v.title && v.title !== "[Private video]" && v.title !== "[Deleted video]").map((v) => {
+      const entryUrl = v.url || v.webpage_url || (fromYouTube ? `https://www.youtube.com/watch?v=${v.id}` : null);
+      if (!entryUrl) return null;
+      return {
+        id: v.id,
+        url: entryUrl,
+        title: v.title,
+        duration: v.duration || 0,
+        uploader: v.uploader || v.channel || info.uploader || info.channel || "Unknown",
+        thumbnail: v.thumbnails && v.thumbnails.length > 0 ? v.thumbnails[v.thumbnails.length - 1].url : fromYouTube ? `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg` : ""
+      };
+    }).filter(Boolean);
+    if (videos.length === 0) {
+      return { success: false, error: "No downloadable videos were found at that link." };
+    }
     return {
       success: true,
       title: info.title || "Unknown Playlist",
@@ -748,12 +813,15 @@ function cachedFormatResult(id) {
 }
 function streamFormatsBatch(videos, token, onBasicResponse) {
   return new Promise((resolve) => {
+    var _a;
     if (videos.length === 0) return resolve();
     const args = [
       ...videos.map((v) => v.url),
       "-j",
       "--ignore-errors",
-      ...getAuthArgs(),
+      // A batch always comes from one playlist, so one host — the first entry
+      // decides whether the YouTube cookie jar applies to the whole run.
+      ...getAuthArgs((_a = videos[0]) == null ? void 0 : _a.url),
       ...BASE_ARGS
     ];
     const proc = spawn(ytDlpBinaryPath, args, { env: getYtDlpEnv(), windowsHide: true });
@@ -761,6 +829,7 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
     const received = /* @__PURE__ */ new Set();
     let buf = "";
     proc.stdout.on("data", (chunk) => {
+      var _a2;
       buf += chunk.toString();
       const lines = buf.split("\n");
       buf = lines.pop();
@@ -771,10 +840,12 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
           const id = info.id;
           if (!id) continue;
           received.add(id);
-          const { formats, audioSize } = extractFormats(info);
-          const result = { success: true, formats, audioSize };
-          if (isBasicPlayerResponse(info.formats) && onBasicResponse) {
-            onBasicResponse(id, info.webpage_url || `https://www.youtube.com/watch?v=${id}`);
+          const { formats, audioSize, isAudioOnly } = extractFormats(info);
+          const result = { success: true, formats, audioSize, isAudioOnly };
+          const pageUrl = info.webpage_url || info.original_url;
+          const canRetry = pageUrl ? isYouTubeUrl(pageUrl) : isYouTubeUrl((_a2 = videos[0]) == null ? void 0 : _a2.url);
+          if (canRetry && isBasicPlayerResponse(info.formats) && onBasicResponse) {
+            onBasicResponse(id, pageUrl || `https://www.youtube.com/watch?v=${id}`);
           } else {
             cacheFormats(id, result);
           }
@@ -830,8 +901,9 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
     if (token !== prefetchToken) break;
     try {
       const info = await runYtDlpJson(v.url, ["--extractor-args", "youtube:player_client=default,android"], true);
-      const { formats, audioSize } = extractFormats(info);
-      const result = { success: true, formats, audioSize };
+      const { formats, audioSize, isAudioOnly } = extractFormats(info);
+      if (formats.length === 0 && !isAudioOnly) continue;
+      const result = { success: true, formats, audioSize, isAudioOnly };
       cacheFormats(v.id, result);
       if (token === prefetchToken) safeSend("playlist-format-result", { id: v.id, ...result });
     } catch (e) {
@@ -908,6 +980,67 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
   }
   return result;
 });
+function outputTemplate(filePath) {
+  return filePath.replace(/%/g, "%%");
+}
+function buildFormatSelector(quality, type) {
+  if (type === "mp3") {
+    return {
+      // A muxed stream is a perfectly good source to extract audio from, and
+      // on muxed-only sites it is the ONLY source — without the `/b` fallback
+      // yt-dlp aborts with "Requested format is not available".
+      formatArg: "ba/b",
+      // Deliberately NOT sorted by `abr`. YouTube ships a dynamic-range
+      // compressed twin of each audio track (140-drc) whose measured bitrate
+      // is a hair higher than the original's but whose `quality` is lower.
+      // Sorting on bitrate promoted the squashed track over the real one; the
+      // default sort's `quality` key already knows better.
+      sortArg: "acodec:aac"
+    };
+  }
+  const h = parseInt(quality, 10);
+  if (!isNaN(h)) {
+    return {
+      // Exact rung first, then anything at or below it, then anything at all,
+      // so a stripped or expired response still yields a file.
+      formatArg: `bv*[height<=${h}]+ba/b[height<=${h}]/bv*[height<=${h}]/bv*+ba/b`,
+      sortArg: `res:${h},vcodec:h264,acodec:aac`
+    };
+  }
+  return {
+    formatArg: "bv*+ba/b",
+    sortArg: "res,vcodec:h264,acodec:aac"
+  };
+}
+const MP4_SAFE_AUDIO = /* @__PURE__ */ new Set(["aac", "mp3", "alac", "ac3", "eac3"]);
+function probeAudioCodec(file) {
+  return new Promise((resolve) => {
+    execFile(ffprobePath, [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_name",
+      "-of",
+      "default=nw=1:nk=1",
+      file
+    ], (err, stdout) => {
+      resolve(err ? "" : String(stdout).trim().split(/\r?\n/)[0] || "");
+    });
+  });
+}
+function ytDlpFailureMessage(stderrLines, code) {
+  const errors = stderrLines.filter((l) => /^ERROR:/i.test(l));
+  const chosen = errors[errors.length - 1] || [...stderrLines].reverse().find((l) => !/^WARNING:/i.test(l));
+  if (!chosen) return `yt-dlp exited with code ${code}`;
+  let cleaned = chosen.replace(/^ERROR:\s*/i, "");
+  const tagged = /^\[[^\]]+\]\s*/.test(cleaned);
+  cleaned = cleaned.replace(/^\[[^\]]+\]\s*/, "");
+  if (tagged) cleaned = cleaned.replace(/^[^\s:]{1,40}:\s+/, "");
+  cleaned = cleaned.replace(/\s*Use --list-formats.*$/i, "").replace(/\s*Set --default-search.*$/i, "").replace(/;\s*please report this issue.*$/i, "").trim();
+  return cleaned || `yt-dlp exited with code ${code}`;
+}
 function deletePartialDownloadFiles(filePath) {
   try {
     if (fs.existsSync(filePath)) {
@@ -1108,17 +1241,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       }
     };
     try {
-      let formatArg;
-      if (type === "mp3") {
-        formatArg = "bestaudio[ext=m4a]/bestaudio";
-      } else {
-        const h = parseInt(quality);
-        if (!isNaN(h)) {
-          formatArg = `bestvideo[height=${h}][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height=${h}][vcodec^=avc]+bestaudio/bestvideo[height=${h}][vcodec!^=av01]+bestaudio[ext=m4a]/bestvideo[height=${h}][vcodec!^=av01]+bestaudio/bestvideo[height=${h}]+bestaudio[ext=m4a]/bestvideo[height=${h}]+bestaudio/bestvideo[height<=${h}][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=${h}][vcodec^=avc]+bestaudio/bestvideo[height<=${h}][vcodec!^=av01]+bestaudio[ext=m4a]/bestvideo[height<=${h}][vcodec!^=av01]+bestaudio/bestvideo[height<=${h}]+bestaudio/best`;
-        } else {
-          formatArg = "bestvideo[vcodec!^=av01]+bestaudio[ext=m4a]/bestvideo[vcodec!^=av01]+bestaudio/bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best";
-        }
-      }
+      const { formatArg, sortArg } = buildFormatSelector(quality, type);
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
@@ -1130,12 +1253,14 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         url,
         "--format",
         formatArg,
+        "--format-sort",
+        sortArg,
         "--output",
-        filePath,
+        outputTemplate(filePath),
         "--ffmpeg-location",
         ffmpegPath,
         "--newline",
-        ...getAuthArgs(),
+        ...getAuthArgs(url),
         ...BASE_ARGS,
         ...DOWNLOAD_SPEED_ARGS
       ];
@@ -1144,7 +1269,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       } else {
         args.push("--merge-output-format", "mp4");
       }
-      console.log("Starting yt-dlp download:", formatArg, "->", filePath);
+      console.log("Starting yt-dlp download:", formatArg, "-S", sortArg, "->", filePath);
       ytDlpProcess = spawn(ytDlpBinaryPath, args, { env: getYtDlpEnv(), detached: true, windowsHide: true });
       sendProgress({ percent: 0, downloadedBytes: 0, totalBytes: 0, stage: "starting" });
       let lastPercent = -1;
@@ -1228,8 +1353,14 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           }
         });
       });
+      const stderrLines = [];
       ytDlpProcess.stderr.on("data", (data) => {
-        console.error("yt-dlp stderr:", data.toString());
+        const text = data.toString();
+        console.error("yt-dlp stderr:", text);
+        for (const line of text.split(/\r?\n/)) {
+          if (line.trim()) stderrLines.push(line.trim());
+        }
+        if (stderrLines.length > 50) stderrLines.splice(0, stderrLines.length - 50);
       });
       await new Promise((resolve, reject) => {
         ytDlpProcess.on("close", (code) => {
@@ -1238,7 +1369,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           } else if (code === 0) {
             resolve();
           } else {
-            reject(new Error(`yt-dlp exited with code ${code}`));
+            reject(new Error(ytDlpFailureMessage(stderrLines, code)));
           }
         });
         ytDlpProcess.on("error", (err) => reject(err));
@@ -1249,6 +1380,8 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         speedWindow = [];
         const tempOutput = filePath + ".tmp.mp4";
         sendProgress({ percent: 0, downloadedBytes: 0, totalBytes: 0, stage: "converting" });
+        const sourceAudio = await probeAudioCodec(filePath);
+        const audioArgs = MP4_SAFE_AUDIO.has(sourceAudio) ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k"];
         await new Promise((resolve, reject) => {
           const convArgs = [
             "-y",
@@ -1256,15 +1389,25 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
             filePath,
             "-c:v",
             "libx264",
+            // The point of this conversion is a file that opens everywhere, so
+            // it is worth real encoder effort rather than the fastest possible
+            // pass. 'ultrafast' at CRF 23 produced visibly soft output that was
+            // also larger than the VP9 source it replaced.
             "-preset",
-            "ultrafast",
+            "medium",
             "-crf",
-            "23",
-            "-c:a",
-            "copy",
+            "18",
+            // 10-bit VP9/AV1 would otherwise come out as H.264 High 10, which
+            // QuickTime, Premiere and iMovie cannot open — the exact players
+            // this conversion exists to satisfy.
+            "-pix_fmt",
+            "yuv420p",
+            ...audioArgs,
+            "-movflags",
+            "+faststart",
             tempOutput
           ];
-          console.log("Starting offline FFmpeg conversion");
+          console.log("Starting offline FFmpeg conversion (source audio:", sourceAudio || "unknown", ")");
           ffmpegProcess = spawn(ffmpegPath, convArgs, { detached: true, windowsHide: true });
           let totalDurationSec = 0;
           ffmpegProcess.stderr.on("data", (data) => {

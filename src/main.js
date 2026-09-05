@@ -610,7 +610,31 @@ ipcMain.handle("check-youtube-auth", async () => {
   return false;
 });
 
-function getAuthArgs() {
+/**
+ * True for youtube.com / youtu.be (and their subdomains) only.
+ *
+ * yt-dlp supports 1000+ sites and most of them need none of the YouTube
+ * workarounds below. Anything YouTube-specific — the cookie jar, the
+ * player-client retry, playlist URL reconstruction — is gated on this so a
+ * PornHub or Dailymotion link takes the plain, generic path.
+ */
+function isYouTubeUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtu.be' || host.endsWith('.youtu.be');
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The cookie jar is scraped from an embedded *YouTube* login, so it only ever
+ * belongs on YouTube requests. Handing it to unrelated extractors leaks the
+ * user's Google session cookies to third-party hosts for no benefit.
+ */
+function getAuthArgs(url) {
+  if (url !== undefined && !isYouTubeUrl(url)) return [];
   if (fs.existsSync(COOKIES_PATH)) {
     return ['--cookies', COOKIES_PATH];
   }
@@ -625,7 +649,7 @@ async function runYtDlpJson(url, extraArgs = [], silent = false) {
     const proc = spawn(ytDlpBinaryPath, [
       url,
       '-J',
-      ...getAuthArgs(),
+      ...getAuthArgs(url),
       ...BASE_ARGS,
       ...extraArgs,
     ], { env: getYtDlpEnv(), windowsHide: true });
@@ -670,28 +694,90 @@ function isBasicPlayerResponse(formats) {
 }
 
 /**
+ * In yt-dlp's schema the string 'none' means "this stream has no video/audio".
+ * A missing/null codec means "unknown", NOT absent — most non-YouTube
+ * extractors leave the codec unset on progressive streams they never probed.
+ * Treating unknown as absent is what made every PornHub format disappear.
+ */
+const codecAbsent = (c) => c === 'none';
+const codecKnown = (c) => typeof c === 'string' && c !== 'none' && c !== 'unknown';
+
+/** yt-dlp marks audio-only streams with resolution === 'audio only'. */
+function isAudioOnlyFormat(f) {
+  return codecAbsent(f.vcodec) || f.resolution === 'audio only';
+}
+
+/**
+ * Best-effort pixel height for a format.
+ *
+ * YouTube always populates `height`. Other extractors may only give
+ * `resolution` ('1080p' or '1920x1080') or a `format_note`/`format_id` that
+ * names the rung ('1080p60', 'hd1080'), so fall through those in turn rather
+ * than dropping the format.
+ */
+function formatHeight(f) {
+  if (f.height > 0) return f.height;
+  for (const s of [f.resolution, f.format_note, f.format_id]) {
+    if (typeof s !== 'string') continue;
+    const wxh = s.match(/^(\d+)\s*[x×]\s*(\d+)$/);
+    if (wxh) return parseInt(wxh[2], 10);
+    const p = s.match(/(\d{3,5})\s*p/i);
+    if (p) return parseInt(p[1], 10);
+  }
+  return 0;
+}
+
+/** Byte size as reported by the extractor, or 0 when it didn't say. */
+function reportedSize(f) {
+  return f.filesize || f.filesize_approx || 0;
+}
+
+/**
+ * Bitrate × duration, the same arithmetic yt-dlp uses for `filesize_approx`.
+ *
+ * Display only. A guess must never outrank a reported size when picking which
+ * format represents a rung, or a stream that merely forgot to declare its
+ * length wins on an inflated number.
+ */
+function estimatedSize(f, durationSec) {
+  const kbps = f.tbr || ((f.vbr || 0) + (f.abr || 0));
+  if (kbps > 0 && durationSec > 0) return Math.round((kbps * 1000 * durationSec) / 8);
+  return 0;
+}
+
+/**
  * Build the unique quality list from a yt-dlp info dump.
- * Priority: adaptive H.264 > adaptive VP9 > muxed H.264 > muxed VP9.
- * AV1 is always deprioritized — poor app compatibility.
+ *
+ * One rung per (height, fps). Where several formats share a rung we keep the
+ * one the download is most likely to actually get: adaptive over muxed, then
+ * H.264 over VP9 over anything else, then the largest. Codec suffixes are
+ * only added to the label when the codec is actually known.
  */
 function extractFormats(info) {
+  const duration = info.duration || 0;
   const heightMap = {};
-  (info.formats || []).forEach(f => {
-    const rawH = f.height || 0;
+  const rawFormats = info.formats || [];
+
+  rawFormats.forEach(f => {
+    if (isAudioOnlyFormat(f)) return;
+
+    const rawH = formatHeight(f);
     const rawW = f.width || 0;
 
     // Use the shorter dimension as the display quality (handles portrait/vertical videos)
     const displayH = (rawW > 0 && rawH > 0) ? Math.min(rawW, rawH) : rawH;
 
-    if (!displayH || displayH < 240) return;
-    if (!f.vcodec || f.vcodec === 'none') return;
+    if (!displayH) return;
 
-    const size = f.filesize || f.filesize_approx || 0;
+    const vcodec = f.vcodec;
+    const known = codecKnown(vcodec);
+    const size = reportedSize(f);
+    const guessedSize = size || estimatedSize(f, duration);
     const fps = f.fps || 30;
-    const isAdaptive = f.acodec === 'none';
-    const isH264 = f.vcodec.startsWith('avc') || f.vcodec === 'h264';
-    const isVP9 = f.vcodec.startsWith('vp09') || f.vcodec.startsWith('vp9');
-    const isAV1 = f.vcodec.startsWith('av01');
+    const isAdaptive = codecAbsent(f.acodec);
+    const isH264 = known && (vcodec.startsWith('avc') || vcodec.startsWith('h264'));
+    const isVP9 = known && (vcodec.startsWith('vp09') || vcodec.startsWith('vp9'));
+    const isAV1 = known && vcodec.startsWith('av01');
 
     const key = `${displayH}_${fps > 30 ? fps : 30}`;
 
@@ -705,46 +791,85 @@ function extractFormats(info) {
       heightMap[key] = {
         displayHeight: displayH,   // shorter dimension — for UI label
         ytdlpHeight: rawH,         // actual yt-dlp height — for format filter
-        fps, size, isAdaptive, isH264, isVP9, isAV1
+        fps, size, guessedSize, isAdaptive, isH264, isVP9, isAV1, known
       };
     }
   });
 
-  const uniqueFormats = Object.values(heightMap)
+  // Sub-240p rungs are noise next to a full YouTube ladder, but on a site that
+  // only offers 144p they are the whole menu — so drop them only when
+  // something better survives.
+  const rungs = Object.values(heightMap);
+  const above240 = rungs.filter(f => f.displayHeight >= 240);
+
+  const uniqueFormats = (above240.length > 0 ? above240 : rungs)
     .map(f => ({
       itag: `${f.ytdlpHeight}`,   // actual yt-dlp height, used in download format arg
-      quality: `${f.displayHeight}p${f.fps > 30 ? f.fps : ''}${f.isH264 ? '' : (f.isVP9 ? ' (VP9)' : (f.isAV1 ? ' (AV1)' : ''))}`,
+      quality: `${f.displayHeight}p${f.fps > 30 ? f.fps : ''}${f.isVP9 ? ' (VP9)' : (f.isAV1 ? ' (AV1)' : '')}`,
       height: f.displayHeight,
       fps: f.fps > 30 ? f.fps : 30,
-      size: f.size,
-      sizeFormatted: f.size > 0 ? formatBytes(f.size) : 'N/A',
-      isH264: f.isH264,
+      size: f.guessedSize,
+      sizeFormatted: f.guessedSize > 0 ? formatBytes(f.guessedSize) : 'N/A',
+      // Drives the "convert to H.264" offer. An unknown codec is assumed
+      // compatible — offering a needless re-encode is worse than skipping it,
+      // and the download itself already prefers H.264 wherever it exists.
+      isH264: f.isH264 || !f.known,
+      codecKnown: f.known,
     }))
     .sort((a, b) => (b.height - a.height) || (b.fps - a.fps));
 
-  const audioFormat = (info.formats || [])
-    .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
+  const audioFormat = rawFormats
+    .filter(f => isAudioOnlyFormat(f) && !codecAbsent(f.acodec))
     .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-  const audioSize = audioFormat?.filesize || audioFormat?.filesize_approx || 0;
+  const audioSize = audioFormat
+    ? (reportedSize(audioFormat) || estimatedSize(audioFormat, duration))
+    : 0;
+
+  // Nothing with a picture in it: SoundCloud, Bandcamp, podcast feeds. The UI
+  // uses this to stay in MP3 mode instead of offering an MP4 that would come
+  // out as a soundtrack in a box.
+  //
+  // Requires a real audio stream, so a page that yielded only storyboards or
+  // no usable formats at all is reported as a failure rather than quietly
+  // presented as a music track.
+  const isAudioOnly = uniqueFormats.length === 0 && !!audioFormat &&
+    rawFormats.every(isAudioOnlyFormat);
 
   return {
-    formats: uniqueFormats.length > 0 ? uniqueFormats : [{ itag: 'best', quality: 'Best', height: 0, size: 0, sizeFormatted: 'N/A', isH264: true }],
+    formats: uniqueFormats.length > 0
+      ? uniqueFormats
+      : (isAudioOnly ? [] : [{ itag: 'best', quality: 'Best', height: 0, size: 0, sizeFormatted: 'N/A', isH264: true, codecKnown: false }]),
     audioSize,
+    isAudioOnly,
   };
 }
 
-/** Fetch a single video's info with the basic-player-response retry. */
+/**
+ * Fetch a single video's info, with the YouTube player-client retry.
+ *
+ * The retry is YouTube-only on purpose. `--extractor-args youtube:...` means
+ * nothing to the other 1000+ extractors, and "fewer than 10 formats" is normal
+ * for most of them — so running it everywhere bought a second cold start per
+ * fetch and nothing else.
+ *
+ * It also only *upgrades*. Some sites hand back a shorter list on a second
+ * call (PornHub's HLS manifests expire within minutes), and blindly taking the
+ * retry's answer would throw away the better one we already had.
+ */
 async function fetchVideoInfoWithRetry(url, silent) {
-  let info = await runYtDlpJson(url, [], silent);
-  if (isBasicPlayerResponse(info.formats)) {
-    try {
-      info = await runYtDlpJson(url, ['--extractor-args', 'youtube:player_client=default,android'], silent);
-    } catch (retryErr) {
-      // Retry failed — carry on with whatever we got the first time
-      console.warn('Player-client retry failed, using initial result:', retryErr.message);
-    }
+  const info = await runYtDlpJson(url, [], silent);
+  if (!isYouTubeUrl(url) || !isBasicPlayerResponse(info.formats)) return info;
+
+  try {
+    const retried = await runYtDlpJson(url, ['--extractor-args', 'youtube:player_client=default,android'], silent);
+    const before = (info.formats || []).length;
+    const after = (retried.formats || []).length;
+    return after >= before ? retried : info;
+  } catch (retryErr) {
+    // Retry failed — carry on with whatever we got the first time
+    console.warn('Player-client retry failed, using initial result:', retryErr.message);
+    return info;
   }
-  return info;
 }
 
 // Short-lived, in-memory only. Bouncing between the playlist prompt, the
@@ -753,8 +878,15 @@ const VIDEO_INFO_TTL_MS = 10 * 60 * 1000;
 const VIDEO_INFO_MAX = 50;
 const videoInfoCache = new Map(); // videoId (or raw url) -> { t, payload }
 
-/** Stable cache key for a watch/shorts/youtu.be URL. */
+/**
+ * Stable cache key for a watch/shorts/youtu.be URL.
+ *
+ * Only YouTube collapses to a bare id — other sites use `?v=` for unrelated
+ * things, and keying on it would let two different sites' videos share a cache
+ * entry. Everything else keys on the full URL.
+ */
 function videoKeyFromUrl(url) {
+  if (!isYouTubeUrl(url)) return url;
   try {
     const u = new URL(url);
     const v = u.searchParams.get('v');
@@ -781,8 +913,8 @@ ipcMain.handle("get-video-info", async (event, url) => {
   try {
     console.log('Fetching video info for:', url);
     const info = await fetchVideoInfoWithRetry(url, false);
-    const { formats, audioSize } = extractFormats(info);
-    console.log('Available qualities:', formats.map(f => f.quality).join(', '));
+    const { formats, audioSize, isAudioOnly } = extractFormats(info);
+    console.log('Available qualities:', isAudioOnly ? 'audio only' : formats.map(f => f.quality).join(', '));
 
     const payload = {
       success: true,
@@ -795,6 +927,13 @@ ipcMain.handle("get-video-info", async (event, url) => {
       uploader: info.uploader || info.channel || '',
       audioSize,
       audioSizeFormatted: formatBytes(audioSize),
+      isAudioOnly,
+      // The URL the download must actually use. yt-dlp ids are only
+      // round-trippable back into a URL on YouTube; everywhere else the id is
+      // extractor-local ('65a46f8847bef') and rebuilding a link from it
+      // produces a dead one.
+      webpageUrl: info.webpage_url || info.original_url || url,
+      extractor: info.extractor_key || info.extractor || '',
     };
 
     if (videoInfoCache.size >= VIDEO_INFO_MAX) {
@@ -802,7 +941,7 @@ ipcMain.handle("get-video-info", async (event, url) => {
     }
     videoInfoCache.set(cacheKey, { t: Date.now(), payload });
     // The playlist view can reuse the derived formats for this video for free
-    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize });
+    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize, isAudioOnly });
 
     return payload;
   } catch (error) {
@@ -819,33 +958,49 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
     return { success: false, error: 'yt-dlp is updating in the background, please try again in a moment.' };
   }
   try {
-    // Construct a clean playlist URL to force yt-dlp to ignore the video part
+    // On YouTube a watch URL carrying ?list= is ambiguous, so rebuild a bare
+    // playlist URL to force the playlist reading. Elsewhere `list` is just
+    // another query parameter and rewriting the URL would point at the wrong
+    // site entirely — pass those through untouched.
     let cleanUrl = url;
-    try {
-      const u = new URL(url);
-      const listId = u.searchParams.get('list');
-      if (listId) {
-        cleanUrl = `https://www.youtube.com/playlist?list=${listId}`;
-      }
-    } catch (e) {}
+    if (isYouTubeUrl(url)) {
+      try {
+        const listId = new URL(url).searchParams.get('list');
+        if (listId) cleanUrl = `https://www.youtube.com/playlist?list=${listId}`;
+      } catch (e) {}
+    }
 
     console.log('Fetching playlist info for:', cleanUrl);
     const info = await runYtDlpJson(cleanUrl, ['--flat-playlist', '--yes-playlist']);
 
     const entries = info.entries || [];
+    const fromYouTube = isYouTubeUrl(cleanUrl);
 
     const videos = entries
       .filter(v => v.id && v.title && v.title !== '[Private video]' && v.title !== '[Deleted video]')
-      .map(v => ({
-        id: v.id,
-        url: v.url || `https://www.youtube.com/watch?v=${v.id}`,
-        title: v.title,
-        duration: v.duration || 0,
-        uploader: v.uploader || v.channel || info.uploader || info.channel || 'Unknown',
-        thumbnail: v.thumbnails && v.thumbnails.length > 0
-          ? v.thumbnails[v.thumbnails.length - 1].url
-          : `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`
-      }));
+      .map(v => {
+        // Only YouTube ids round-trip into a URL. For every other extractor a
+        // missing entry URL means we have nothing to download from, so drop
+        // the entry rather than fabricate a youtube.com link that 404s.
+        const entryUrl = v.url || v.webpage_url ||
+          (fromYouTube ? `https://www.youtube.com/watch?v=${v.id}` : null);
+        if (!entryUrl) return null;
+        return {
+          id: v.id,
+          url: entryUrl,
+          title: v.title,
+          duration: v.duration || 0,
+          uploader: v.uploader || v.channel || info.uploader || info.channel || 'Unknown',
+          thumbnail: v.thumbnails && v.thumbnails.length > 0
+            ? v.thumbnails[v.thumbnails.length - 1].url
+            : (fromYouTube ? `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg` : '')
+        };
+      })
+      .filter(Boolean);
+
+    if (videos.length === 0) {
+      return { success: false, error: 'No downloadable videos were found at that link.' };
+    }
 
     return {
       success: true,
@@ -975,7 +1130,9 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
       ...videos.map(v => v.url),
       '-j',
       '--ignore-errors',
-      ...getAuthArgs(),
+      // A batch always comes from one playlist, so one host — the first entry
+      // decides whether the YouTube cookie jar applies to the whole run.
+      ...getAuthArgs(videos[0]?.url),
       ...BASE_ARGS,
     ];
     const proc = spawn(ytDlpBinaryPath, args, { env: getYtDlpEnv(), windowsHide: true });
@@ -995,12 +1152,17 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
           const id = info.id;
           if (!id) continue;
           received.add(id);
-          const { formats, audioSize } = extractFormats(info);
-          const result = { success: true, formats, audioSize };
+          const { formats, audioSize, isAudioOnly } = extractFormats(info);
+          const result = { success: true, formats, audioSize, isAudioOnly };
           // A stripped "basic" response is worth a targeted retry later, but
           // still send it now so the row becomes interactive immediately.
-          if (isBasicPlayerResponse(info.formats) && onBasicResponse) {
-            onBasicResponse(id, info.webpage_url || `https://www.youtube.com/watch?v=${id}`);
+          // Only YouTube has a second player client to retry against, and only
+          // YouTube ids can be turned back into a URL — everything else keeps
+          // whatever the extractor gave us.
+          const pageUrl = info.webpage_url || info.original_url;
+          const canRetry = pageUrl ? isYouTubeUrl(pageUrl) : isYouTubeUrl(videos[0]?.url);
+          if (canRetry && isBasicPlayerResponse(info.formats) && onBasicResponse) {
+            onBasicResponse(id, pageUrl || `https://www.youtube.com/watch?v=${id}`);
           } else {
             cacheFormats(id, result);
           }
@@ -1072,8 +1234,9 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
     if (token !== prefetchToken) break;
     try {
       const info = await runYtDlpJson(v.url, ['--extractor-args', 'youtube:player_client=default,android'], true);
-      const { formats, audioSize } = extractFormats(info);
-      const result = { success: true, formats, audioSize };
+      const { formats, audioSize, isAudioOnly } = extractFormats(info);
+      if (formats.length === 0 && !isAudioOnly) continue; // retry came back worse — keep what we sent
+      const result = { success: true, formats, audioSize, isAudioOnly };
       cacheFormats(v.id, result);
       if (token === prefetchToken) safeSend('playlist-format-result', { id: v.id, ...result });
     } catch (e) { /* keep the basic result already sent */ }
@@ -1161,6 +1324,125 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
   }
   return result;
 });
+
+/**
+ * `--output` is a *template*, not a literal path: yt-dlp expands `%(title)s`
+ * and friends inside it. A destination the user picked can legitimately
+ * contain a percent sign, so escape it as `%%` or the download dies with
+ * "invalid field" on a filename the save dialog itself produced.
+ */
+function outputTemplate(filePath) {
+  return filePath.replace(/%/g, '%%');
+}
+
+/**
+ * Translate a UI quality choice into a yt-dlp format selector plus sort order.
+ *
+ * Two flags replace what used to be a twelve-alternative fallback chain:
+ *
+ *   -f  says which *combinations are acceptable*. `bv*` is "best stream that
+ *       has video" (it may carry audio too) rather than `bestvideo`, which is
+ *       video-ONLY and therefore matches nothing on the many sites that ship
+ *       muxed streams exclusively. `/b` then accepts a single combined stream.
+ *
+ *   -S  says which of the acceptable ones to *prefer*. Fields are applied in
+ *       order, so `res:H` decides first and `vcodec:h264` only breaks ties
+ *       between formats at the same resolution. That is what lets us keep
+ *       preferring H.264 for editor compatibility without ever capping
+ *       resolution — the trap the old chain fell into, since H.264 stops at
+ *       1080p on YouTube.
+ *
+ * Quality is the priority throughout: the requested rung wins over codec
+ * preference, and codec preference wins over container convenience.
+ */
+function buildFormatSelector(quality, type) {
+  if (type === 'mp3') {
+    return {
+      // A muxed stream is a perfectly good source to extract audio from, and
+      // on muxed-only sites it is the ONLY source — without the `/b` fallback
+      // yt-dlp aborts with "Requested format is not available".
+      formatArg: 'ba/b',
+      // Deliberately NOT sorted by `abr`. YouTube ships a dynamic-range
+      // compressed twin of each audio track (140-drc) whose measured bitrate
+      // is a hair higher than the original's but whose `quality` is lower.
+      // Sorting on bitrate promoted the squashed track over the real one; the
+      // default sort's `quality` key already knows better.
+      sortArg: 'acodec:aac',
+    };
+  }
+
+  const h = parseInt(quality, 10);
+  if (!isNaN(h)) {
+    return {
+      // Exact rung first, then anything at or below it, then anything at all,
+      // so a stripped or expired response still yields a file.
+      formatArg:
+        `bv*[height<=${h}]+ba/b[height<=${h}]/` +
+        `bv*[height<=${h}]/` +
+        `bv*+ba/b`,
+      sortArg: `res:${h},vcodec:h264,acodec:aac`,
+    };
+  }
+
+  // "Best" = highest resolution available, with H.264 preferred only among
+  // formats that tie on resolution.
+  return {
+    formatArg: 'bv*+ba/b',
+    sortArg: 'res,vcodec:h264,acodec:aac',
+  };
+}
+
+// Audio codecs an MP4 can carry that editors and QuickTime actually accept.
+const MP4_SAFE_AUDIO = new Set(['aac', 'mp3', 'alac', 'ac3', 'eac3']);
+
+/** Codec name of the first audio stream, or '' if it can't be determined. */
+function probeAudioCodec(file) {
+  return new Promise((resolve) => {
+    execFile(ffprobePath, [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=nw=1:nk=1',
+      file,
+    ], (err, stdout) => {
+      resolve(err ? '' : String(stdout).trim().split(/\r?\n/)[0] || '');
+    });
+  });
+}
+
+/**
+ * Turn captured yt-dlp stderr into something worth showing the user.
+ *
+ * Prefers the last real ERROR line, strips yt-dlp's own prefixes, and falls
+ * back to the exit code only when there is genuinely nothing better.
+ */
+function ytDlpFailureMessage(stderrLines, code) {
+  const errors = stderrLines.filter(l => /^ERROR:/i.test(l));
+  // Without an ERROR line, the last non-warning line is the best guess. A
+  // warning is never the reason a download failed, so never report one as if
+  // it were.
+  const chosen = errors[errors.length - 1] ||
+    [...stderrLines].reverse().find(l => !/^WARNING:/i.test(l));
+  if (!chosen) return `yt-dlp exited with code ${code}`;
+
+  let cleaned = chosen.replace(/^ERROR:\s*/i, '');
+
+  // yt-dlp formats these as "[Extractor] <video id>: <message>". Only strip a
+  // leading "<id>: " when the bracketed extractor tag proves one was there —
+  // otherwise a message that merely happens to contain a colon loses its
+  // first word.
+  const tagged = /^\[[^\]]+\]\s*/.test(cleaned);
+  cleaned = cleaned.replace(/^\[[^\]]+\]\s*/, '');
+  if (tagged) cleaned = cleaned.replace(/^[^\s:]{1,40}:\s+/, '');
+
+  cleaned = cleaned
+    .replace(/\s*Use --list-formats.*$/i, '')
+    .replace(/\s*Set --default-search.*$/i, '')
+    .replace(/;\s*please report this issue.*$/i, '')
+    .trim();
+
+  return cleaned || `yt-dlp exited with code ${code}`;
+}
 
 /**
  * Deletes the final output file AND any yt-dlp intermediate temp files.
@@ -1365,39 +1647,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
     };
 
     try {
-      let formatArg;
-      if (type === 'mp3') {
-        formatArg = 'bestaudio[ext=m4a]/bestaudio';
-      } else {
-        const h = parseInt(quality);
-        if (!isNaN(h)) {
-          // Prefer H.264 (avc) for QuickTime / Premiere / iMovie compatibility.
-          // Fall back to VP9 if H.264 isn't available (common for 1440p / 4K).
-          // Fall back to AV1 as a last resort (required for 8K).
-          formatArg =
-            `bestvideo[height=${h}][vcodec^=avc]+bestaudio[ext=m4a]/` +
-            `bestvideo[height=${h}][vcodec^=avc]+bestaudio/` +
-            `bestvideo[height=${h}][vcodec!^=av01]+bestaudio[ext=m4a]/` +
-            `bestvideo[height=${h}][vcodec!^=av01]+bestaudio/` +
-            `bestvideo[height=${h}]+bestaudio[ext=m4a]/` +
-            `bestvideo[height=${h}]+bestaudio/` +
-            `bestvideo[height<=${h}][vcodec^=avc]+bestaudio[ext=m4a]/` +
-            `bestvideo[height<=${h}][vcodec^=avc]+bestaudio/` +
-            `bestvideo[height<=${h}][vcodec!^=av01]+bestaudio[ext=m4a]/` +
-            `bestvideo[height<=${h}][vcodec!^=av01]+bestaudio/` +
-            `bestvideo[height<=${h}]+bestaudio/best`;
-        } else {
-          // "Best" means best RESOLUTION available (matching what the UI
-          // promises), not best-compatible codec — an H.264-first chain here
-          // silently capped 4K videos at 1080p (H.264 tops out at 1080p on
-          // YouTube). AV1 stays deprioritized for compatibility.
-          formatArg =
-            'bestvideo[vcodec!^=av01]+bestaudio[ext=m4a]/' +
-            'bestvideo[vcodec!^=av01]+bestaudio/' +
-            'bestvideo+bestaudio[ext=m4a]/' +
-            'bestvideo+bestaudio/best';
-        }
-      }
+      const { formatArg, sortArg } = buildFormatSelector(quality, type);
 
       // Delete any stale file just before starting (path may have been chosen
       // a while ago if this job sat in the queue)
@@ -1410,10 +1660,11 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       const args = [
         url,
         '--format', formatArg,
-        '--output', filePath,
+        '--format-sort', sortArg,
+        '--output', outputTemplate(filePath),
         '--ffmpeg-location', ffmpegPath,
         '--newline',
-        ...getAuthArgs(),
+        ...getAuthArgs(url),
         ...BASE_ARGS,
         ...DOWNLOAD_SPEED_ARGS,
       ];
@@ -1421,7 +1672,8 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       // NOTE: never override player_client for downloads — when cookies are
       // present yt-dlp skips the android client, and a reduced client set can
       // end up with no downloadable formats at all ("Only images are
-      // available"). The height<= fallback chain handles stripped responses.
+      // available"). The height<= relaxation in the selector handles stripped
+      // responses.
 
       if (type === 'mp3') {
         args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
@@ -1429,7 +1681,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         args.push('--merge-output-format', 'mp4');
       }
 
-      console.log('Starting yt-dlp download:', formatArg, '->', filePath);
+      console.log('Starting yt-dlp download:', formatArg, '-S', sortArg, '->', filePath);
 
       // Spawn in its own process group (detached) so SIGSTOP/SIGCONT
       // can freeze/resume the entire group via negative PID
@@ -1531,8 +1783,19 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         });
       });
 
+      // Keep the tail of stderr so a failure can say what actually went wrong.
+      // Across 1000+ extractors the useful part is nearly always yt-dlp's own
+      // ERROR line ("Requested format is not available", "This video is
+      // private", "geo restricted"), and "exited with code 1" tells the user
+      // nothing they can act on.
+      const stderrLines = [];
       ytDlpProcess.stderr.on('data', (data) => {
-        console.error('yt-dlp stderr:', data.toString());
+        const text = data.toString();
+        console.error('yt-dlp stderr:', text);
+        for (const line of text.split(/\r?\n/)) {
+          if (line.trim()) stderrLines.push(line.trim());
+        }
+        if (stderrLines.length > 50) stderrLines.splice(0, stderrLines.length - 50);
       });
 
       await new Promise((resolve, reject) => {
@@ -1542,7 +1805,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
           } else if (code === 0) {
             resolve();
           } else {
-            reject(new Error(`yt-dlp exited with code ${code}`));
+            reject(new Error(ytDlpFailureMessage(stderrLines, code)));
           }
         });
         ytDlpProcess.on('error', (err) => reject(err));
@@ -1557,18 +1820,35 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         const tempOutput = filePath + '.tmp.mp4';
         sendProgress({ percent: 0, downloadedBytes: 0, totalBytes: 0, stage: 'converting' });
 
+        // Copying the audio is free and lossless, but only when the stream is
+        // already something MP4 can carry. VP9/AV1 downloads often arrive with
+        // Opus, which most editors refuse to open inside MP4.
+        const sourceAudio = await probeAudioCodec(filePath);
+        const audioArgs = MP4_SAFE_AUDIO.has(sourceAudio)
+          ? ['-c:a', 'copy']
+          : ['-c:a', 'aac', '-b:a', '192k'];
+
         await new Promise((resolve, reject) => {
           const convArgs = [
             '-y',
             '-i', filePath,
             '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-crf', '23',
-            '-c:a', 'copy',
+            // The point of this conversion is a file that opens everywhere, so
+            // it is worth real encoder effort rather than the fastest possible
+            // pass. 'ultrafast' at CRF 23 produced visibly soft output that was
+            // also larger than the VP9 source it replaced.
+            '-preset', 'medium',
+            '-crf', '18',
+            // 10-bit VP9/AV1 would otherwise come out as H.264 High 10, which
+            // QuickTime, Premiere and iMovie cannot open — the exact players
+            // this conversion exists to satisfy.
+            '-pix_fmt', 'yuv420p',
+            ...audioArgs,
+            '-movflags', '+faststart',
             tempOutput
           ];
 
-          console.log('Starting offline FFmpeg conversion');
+          console.log('Starting offline FFmpeg conversion (source audio:', sourceAudio || 'unknown', ')');
           ffmpegProcess = spawn(ffmpegPath, convArgs, { detached: true, windowsHide: true });
 
           let totalDurationSec = 0;

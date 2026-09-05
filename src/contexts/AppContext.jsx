@@ -2,6 +2,45 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 
 const AppContext = createContext();
 
+const isYouTubeUrl = (url) => {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtu.be' || host.endsWith('.youtu.be');
+  } catch (e) {
+    return false;
+  }
+};
+
+// Collection URLs on non-YouTube sites, kept deliberately narrow. Guessing
+// wrong sends a single video into the playlist view, so anything unrecognised
+// falls through to the single-video path — which is what every link did before.
+const COLLECTION_PATHS = [
+  /\/playlists?(\/|$)/i,   // generic, Dailymotion, Vimeo
+  /\/sets\//i,             // SoundCloud
+  /\/album\//i,            // Bandcamp
+];
+
+/**
+ * Decide how a pasted link should be fetched: as a single video, as a
+ * playlist, or as a YouTube watch-inside-playlist link that could be either
+ * and therefore needs to ask.
+ */
+const classifyUrl = (url) => {
+  let u;
+  try { u = new URL(url); } catch (e) { return 'video'; }
+
+  if (isYouTubeUrl(url)) {
+    const hasList = u.searchParams.has('list');
+    const hasVideo = u.searchParams.has('v') || url.includes('youtu.be/') || url.includes('/shorts/');
+    if (hasList && hasVideo) return 'hybrid';
+    if (hasList) return 'playlist';
+    return 'video';
+  }
+
+  return COLLECTION_PATHS.some(re => re.test(u.pathname)) ? 'playlist' : 'video';
+};
+
 export const useAppContext = () => {
   const context = useContext(AppContext);
   if (!context) {
@@ -169,7 +208,9 @@ export const AppProvider = ({ children }) => {
       const result = await window.electronAPI.getVideoInfo(currentUrl);
       if (currentFetchId !== fetchIdRef.current) return;
       if (result.success) {
-        setVideoDetails(result);
+        // Keep the URL this fetch was made from. It is the fallback the
+        // download uses when the extractor didn't report a webpage_url.
+        setVideoDetails({ ...result, sourceUrl: currentUrl });
       } else {
         console.error(`Error: ${result.error}`);
         setVideoDetails(null);
@@ -200,31 +241,22 @@ export const AppProvider = ({ children }) => {
       setIsLoading(true);
       setFetchError(null);
 
-      try {
-        const u = new URL(urlRef.current);
-        const hasList = u.searchParams.has('list');
-        const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
-        if (hasList && !hasVideo) {
-          setIsPlaylistMode(true);
-        }
-      } catch (e) {}
+      if (classifyUrl(urlRef.current) === 'playlist') {
+        setIsPlaylistMode(true);
+      }
 
       return;
     }
 
-    try {
-      const u = new URL(urlRef.current);
-      const hasList = u.searchParams.has('list');
-      const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
-
-      if (hasList && hasVideo) {
-        setHybridPromptUrl(urlRef.current);
-        return;
-      } else if (hasList && !hasVideo) {
-        runPlaylistFetch();
-        return;
-      }
-    } catch (e) {}
+    const kind = classifyUrl(urlRef.current);
+    if (kind === 'hybrid') {
+      setHybridPromptUrl(urlRef.current);
+      return;
+    }
+    if (kind === 'playlist') {
+      runPlaylistFetch();
+      return;
+    }
 
     runFetch();
   };
@@ -284,20 +316,13 @@ export const AppProvider = ({ children }) => {
     if (!pendingFetchRef.current) return;
     const timer = setTimeout(() => {
       setPendingFetch(false);
-      try {
-        const u = new URL(urlRef.current);
-        const hasList = u.searchParams.has('list');
-        const hasVideo = u.searchParams.has('v') || urlRef.current.includes('youtu.be/') || urlRef.current.includes('/shorts/');
-
-        if (hasList && hasVideo) {
-          setIsLoading(false);
-          setHybridPromptUrl(urlRef.current);
-        } else if (hasList && !hasVideo) {
-          runPlaylistFetch();
-        } else {
-          runFetch();
-        }
-      } catch (e) {
+      const kind = classifyUrl(urlRef.current);
+      if (kind === 'hybrid') {
+        setIsLoading(false);
+        setHybridPromptUrl(urlRef.current);
+      } else if (kind === 'playlist') {
+        runPlaylistFetch();
+      } else {
         runFetch();
       }
     }, 500);
