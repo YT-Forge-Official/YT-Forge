@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } 
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const https = require("https");
+const { pathToFileURL } = require("url");
 const { spawn, execFile } = require("child_process");
 
 // Fix asar-packed paths: ffmpeg-static/ffprobe-static resolve inside .asar
@@ -364,10 +364,23 @@ function createWindow() {
 
   mainWindow.setMenu(null);
 
+  // The renderer is local UI. Nothing it shows may ever navigate this
+  // privileged window anywhere else — not to a remote page, and not to a
+  // local file dropped onto the window (Chromium's default drop action is a
+  // navigation) — nor open a second window. Outbound links go through
+  // 'open-external-link' to the system browser instead. Only the renderer's
+  // own URL is allowed, which keeps reloads working.
+  const indexHtml = path.join(__dirname, '../dist/index.html');
+  const rendererUrl = app.isPackaged ? pathToFileURL(indexHtml).href : 'http://localhost:5173';
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, target) => {
+    if (!target.startsWith(rendererUrl)) event.preventDefault();
+  });
+
   if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL(rendererUrl);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(indexHtml);
   }
 }
 
@@ -412,6 +425,9 @@ app.on('before-quit', () => {
   downloadQueue.forEach(j => { j.cancelled = true; });
   if (activeCtl) {
     activeCtl.cancel();
+    // The download's own cleanup runs when its process exits, which is after
+    // the app has gone — so remove the scratch dir and partial file now.
+    if (activeCtl.cleanupNow) activeCtl.cleanupNow();
   }
   if (networkCheckInterval) {
     clearInterval(networkCheckInterval);
@@ -484,6 +500,10 @@ ipcMain.handle("open-file-location", (event, filePath) => {
   }
 });
 
+const isDirectory = (p) => {
+  try { return !!p && fs.statSync(p).isDirectory(); } catch (e) { return false; }
+};
+
 // Reveal a specific file if it still exists, otherwise fall back to opening
 // the containing folder (used by playlist history items).
 ipcMain.handle("open-file-or-folder", (event, { filePath, fallbackDir }) => {
@@ -491,7 +511,8 @@ ipcMain.handle("open-file-or-folder", (event, { filePath, fallbackDir }) => {
     shell.showItemInFolder(filePath);
     return { opened: 'file' };
   }
-  if (fallbackDir && fs.existsSync(fallbackDir)) {
+  // openPath *executes* a file, so only ever hand it a directory.
+  if (isDirectory(fallbackDir)) {
     shell.openPath(fallbackDir);
     return { opened: 'folder' };
   }
@@ -510,7 +531,24 @@ ipcMain.handle("file-exists", (event, filePath) => {
   }
 });
 
-ipcMain.handle("open-external-link", (event, url) => shell.openExternal(url));
+// Web URLs only. Several call sites hand this a page URL straight out of
+// extractor output or the stored history, and shell.openExternal on a file://
+// or custom-scheme URL would launch local programs.
+ipcMain.handle("open-external-link", async (event, url) => {
+  let parsed;
+  try { parsed = new URL(String(url)); } catch (e) { parsed = null; }
+  if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
+    console.warn('Refusing to open non-web URL:', String(url).slice(0, 200));
+    return false;
+  }
+  try {
+    await shell.openExternal(parsed.toString());
+    return true;
+  } catch (e) {
+    console.error('Failed to open external link:', e.message);
+    return false;
+  }
+});
 
 ipcMain.on("cancel-info-fetch", () => {
   if (currentInfoFetchProcess) {
@@ -1280,11 +1318,14 @@ ipcMain.handle("choose-directory", async () => {
 });
 
 // Ordered download candidates for a thumbnail URL. Playlist entries carry
-// hqdefault (480x360, letterboxed to 4:3) and ?sqp= variants of it are served
-// as WebP regardless of Accept headers — so for i.ytimg.com try the clean
-// 16:9 JPEG variants first, falling back until one exists (missing variants
-// return a real 404). Non-YouTube URLs are used as-is.
+// hqdefault (480x360, letterboxed to 4:3), so for i.ytimg.com try the clean
+// 16:9 variants in descending quality, falling back until one exists (missing
+// variants return a real 404). The /vi/*.jpg form is preferred so writeJpeg
+// can skip the transcode. Non-YouTube URLs are used as-is.
 function thumbnailCandidates(rawUrl) {
+  // Some extractors emit protocol-relative URLs; the <img> tag resolves them
+  // against the page, net.fetch cannot.
+  if (typeof rawUrl === 'string' && rawUrl.startsWith('//')) rawUrl = 'https:' + rawUrl;
   try {
     const u = new URL(rawUrl);
     if (u.hostname === 'i.ytimg.com') {
@@ -1303,45 +1344,116 @@ function thumbnailCandidates(rawUrl) {
   return [rawUrl];
 }
 
-function fetchImageToFile(url, filePath) {
-  return new Promise((resolve) => {
-    // Closing the stream on failure emits 'finish', so an explicit flag keeps
-    // the success handler from claiming a failed attempt; resolving only after
-    // the unlink keeps it from racing the next fallback candidate's write.
-    let failed = false;
-    const fileStream = fs.createWriteStream(filePath);
-    const fail = (error) => {
-      failed = true;
-      fileStream.close(() => fs.unlink(filePath, () => resolve({ success: false, error })));
-    };
-    const request = https.get(url, (response) => {
-      if (response.statusCode !== 200) {
-        response.resume();
-        fail(`Download failed. Status: ${response.statusCode}`);
-        return;
-      }
-      response.pipe(fileStream);
-    });
-    fileStream.on('finish', () => {
-      if (!failed) fileStream.close(() => resolve({ success: true, path: filePath }));
-    });
-    request.on('error', (err) => fail(err.message));
+/**
+ * Download an image into memory.
+ *
+ * Goes through Electron's net stack rather than Node's https module on
+ * purpose: outside YouTube, thumbnails are routinely served over plain http
+ * and sit behind 30x redirects (Reddit, X and Instagram CDNs all do this).
+ * https.get() throws on the http: scheme and reports a redirect as a failed
+ * status, so it could only ever save YouTube's.
+ */
+const THUMBNAIL_TIMEOUT_MS = 20000;
+const THUMBNAIL_MAX_BYTES = 20 * 1024 * 1024; // a poster frame, not a video
+
+async function fetchImageBuffer(url) {
+  const res = await net.fetch(url, {
+    redirect: 'follow',
+    // Thumbnails are public; never attach the session's (YouTube login) cookies.
+    credentials: 'omit',
+    // A CDN that accepts the connection and never answers must not hang the
+    // save forever, and a URL that resolves to something huge must not be
+    // buffered whole in the main process.
+    signal: AbortSignal.timeout(THUMBNAIL_TIMEOUT_MS),
   });
+  if (!res.ok) throw new Error(`Download failed. Status: ${res.status}`);
+  const declared = Number(res.headers.get('content-length'));
+  if (declared > THUMBNAIL_MAX_BYTES) throw new Error('Image is too large to be a thumbnail.');
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw new Error('Empty image response.');
+  if (buf.length > THUMBNAIL_MAX_BYTES) throw new Error('Image is too large to be a thumbnail.');
+  // A CDN can answer 200 with an HTML challenge or error page. Only the bytes
+  // prove it is a picture — and a non-image must fail here so the caller
+  // moves on to the next candidate instead of saving it as a ".jpg".
+  if (!isImageBuffer(buf)) throw new Error('Response was not an image.');
+  return buf;
+}
+
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
+
+/** JPEG, PNG, GIF, WebP, BMP or AVIF/HEIF by magic bytes. */
+function isImageBuffer(buf) {
+  if (buf.length < 12) return false;
+  if (buf.subarray(0, 3).equals(JPEG_MAGIC)) return true;
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true;
+  const head = buf.subarray(0, 4).toString('latin1');
+  if (head === 'GIF8' || head.startsWith('BM')) return true;
+  if (head === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return true;
+  if (buf.subarray(4, 8).toString('latin1') === 'ftyp') return true;
+  return false;
+}
+
+/**
+ * Write an image as a real JPEG. The save dialog promised a .jpg, and most
+ * sites serve thumbnails as WebP or PNG, so anything that isn't JPEG already
+ * is transcoded through the bundled ffmpeg. Should that fail, the original
+ * bytes are kept — the caller has already verified they are an image, and a
+ * mislabelled image beats no image.
+ */
+async function writeJpeg(buf, filePath) {
+  if (buf.subarray(0, 3).equals(JPEG_MAGIC)) {
+    fs.writeFileSync(filePath, buf);
+    return;
+  }
+  const tmpIn = path.join(os.tmpdir(), `yt-forge-thumb-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(tmpIn, buf);
+  try {
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegPath, [
+        '-y', '-v', 'error', '-i', tmpIn,
+        '-frames:v', '1', '-q:v', '2',
+        // `-update 1` makes image2 write to the literal filename instead of
+        // treating it as a numbered pattern.
+        '-f', 'image2', '-update', '1', filePath,
+      ], { windowsHide: true }, (err) => (err ? reject(err) : resolve()));
+    });
+  } catch (e) {
+    console.warn('Thumbnail transcode failed, saving original bytes:', e.message);
+    fs.writeFileSync(filePath, buf);
+  } finally {
+    try { fs.unlinkSync(tmpIn); } catch (e) { }
+  }
 }
 
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
+  if (!url) return { success: false, error: 'No thumbnail URL.' };
   const safeTitle = safeFileStem(title, 'jpg');
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: 'Save Thumbnail', defaultPath: `${safeTitle}_thumbnail.jpg`,
     buttonLabel: 'Save Image', filters: [{ name: 'JPEG Image', extensions: ['jpg'] }]
   });
   if (canceled || !filePath) return { success: false, error: 'Save dialog was canceled.' };
-  let result = { success: false, error: 'No thumbnail URL.' };
+  // Fetch inside the loop, write once after it: a disk error on the chosen
+  // path is not a bad candidate and must not trigger four more downloads.
+  let buf = null;
+  let lastError = 'Download failed.';
   for (const candidate of thumbnailCandidates(url)) {
-    result = await fetchImageToFile(candidate, filePath);
-    if (result.success) break;
+    try {
+      buf = await fetchImageBuffer(candidate);
+      break;
+    } catch (e) {
+      lastError = e.message;
+    }
   }
-  return result;
+  if (!buf) return { success: false, error: lastError };
+  try {
+    await writeJpeg(buf, filePath);
+    return { success: true, path: filePath };
+  } catch (e) {
+    // Don't leave a half-written file behind a failed save.
+    try { fs.unlinkSync(filePath); } catch (e2) { }
+    return { success: false, error: e.message };
+  }
 });
 
 /**
@@ -1709,6 +1821,16 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       get isPaused() { return isPaused; },
       get pauseReason() { return pauseReason; },
       get stage() { return downloadStage; },
+      // Synchronous best-effort cleanup for app quit. During conversion the
+      // download itself is complete, so the original is kept — the same
+      // choice the in-app cancel dialog defaults to offering.
+      cleanupNow: () => {
+        removeWorkDir(workDir);
+        workDir = null;
+        if (downloadStage !== 'converting' && downloadStage !== 'done') {
+          deletePartialDownloadFiles(filePath);
+        }
+      },
     };
 
     try {

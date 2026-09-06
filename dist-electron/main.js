@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } 
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const https = require("https");
+const { pathToFileURL } = require("url");
 const { spawn, execFile } = require("child_process");
 const fixAsar = (p) => p.replace("app.asar", "app.asar.unpacked");
 const ffmpegPath = fixAsar(require("ffmpeg-static"));
@@ -262,10 +262,16 @@ function createWindow() {
     }
   });
   mainWindow.setMenu(null);
+  const indexHtml = path.join(__dirname, "../dist/index.html");
+  const rendererUrl = app.isPackaged ? pathToFileURL(indexHtml).href : "http://localhost:5173";
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, target) => {
+    if (!target.startsWith(rendererUrl)) event.preventDefault();
+  });
   if (!app.isPackaged) {
-    mainWindow.loadURL("http://localhost:5173");
+    mainWindow.loadURL(rendererUrl);
   } else {
-    mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+    mainWindow.loadFile(indexHtml);
   }
 }
 function startNetworkMonitoring() {
@@ -299,6 +305,7 @@ app.on("before-quit", () => {
   });
   if (activeCtl) {
     activeCtl.cancel();
+    if (activeCtl.cleanupNow) activeCtl.cleanupNow();
   }
   if (networkCheckInterval) {
     clearInterval(networkCheckInterval);
@@ -361,12 +368,19 @@ ipcMain.handle("open-file-location", (event, filePath) => {
     );
   }
 });
+const isDirectory = (p) => {
+  try {
+    return !!p && fs.statSync(p).isDirectory();
+  } catch (e) {
+    return false;
+  }
+};
 ipcMain.handle("open-file-or-folder", (event, { filePath, fallbackDir }) => {
   if (filePath && fs.existsSync(filePath)) {
     shell.showItemInFolder(filePath);
     return { opened: "file" };
   }
-  if (fallbackDir && fs.existsSync(fallbackDir)) {
+  if (isDirectory(fallbackDir)) {
     shell.openPath(fallbackDir);
     return { opened: "folder" };
   }
@@ -383,7 +397,25 @@ ipcMain.handle("file-exists", (event, filePath) => {
     return false;
   }
 });
-ipcMain.handle("open-external-link", (event, url) => shell.openExternal(url));
+ipcMain.handle("open-external-link", async (event, url) => {
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch (e) {
+    parsed = null;
+  }
+  if (!parsed || parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    console.warn("Refusing to open non-web URL:", String(url).slice(0, 200));
+    return false;
+  }
+  try {
+    await shell.openExternal(parsed.toString());
+    return true;
+  } catch (e) {
+    console.error("Failed to open external link:", e.message);
+    return false;
+  }
+});
 ipcMain.on("cancel-info-fetch", () => {
   if (currentInfoFetchProcess) {
     try {
@@ -929,6 +961,7 @@ ipcMain.handle("choose-directory", async () => {
   return result.filePaths[0];
 });
 function thumbnailCandidates(rawUrl) {
+  if (typeof rawUrl === "string" && rawUrl.startsWith("//")) rawUrl = "https:" + rawUrl;
   try {
     const u = new URL(rawUrl);
     if (u.hostname === "i.ytimg.com") {
@@ -946,29 +979,78 @@ function thumbnailCandidates(rawUrl) {
   }
   return [rawUrl];
 }
-function fetchImageToFile(url, filePath) {
-  return new Promise((resolve) => {
-    let failed = false;
-    const fileStream = fs.createWriteStream(filePath);
-    const fail = (error) => {
-      failed = true;
-      fileStream.close(() => fs.unlink(filePath, () => resolve({ success: false, error })));
-    };
-    const request = https.get(url, (response) => {
-      if (response.statusCode !== 200) {
-        response.resume();
-        fail(`Download failed. Status: ${response.statusCode}`);
-        return;
-      }
-      response.pipe(fileStream);
-    });
-    fileStream.on("finish", () => {
-      if (!failed) fileStream.close(() => resolve({ success: true, path: filePath }));
-    });
-    request.on("error", (err) => fail(err.message));
+const THUMBNAIL_TIMEOUT_MS = 2e4;
+const THUMBNAIL_MAX_BYTES = 20 * 1024 * 1024;
+async function fetchImageBuffer(url) {
+  const res = await net.fetch(url, {
+    redirect: "follow",
+    // Thumbnails are public; never attach the session's (YouTube login) cookies.
+    credentials: "omit",
+    // A CDN that accepts the connection and never answers must not hang the
+    // save forever, and a URL that resolves to something huge must not be
+    // buffered whole in the main process.
+    signal: AbortSignal.timeout(THUMBNAIL_TIMEOUT_MS)
   });
+  if (!res.ok) throw new Error(`Download failed. Status: ${res.status}`);
+  const declared = Number(res.headers.get("content-length"));
+  if (declared > THUMBNAIL_MAX_BYTES) throw new Error("Image is too large to be a thumbnail.");
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw new Error("Empty image response.");
+  if (buf.length > THUMBNAIL_MAX_BYTES) throw new Error("Image is too large to be a thumbnail.");
+  if (!isImageBuffer(buf)) throw new Error("Response was not an image.");
+  return buf;
+}
+const JPEG_MAGIC = Buffer.from([255, 216, 255]);
+function isImageBuffer(buf) {
+  if (buf.length < 12) return false;
+  if (buf.subarray(0, 3).equals(JPEG_MAGIC)) return true;
+  if (buf.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return true;
+  const head = buf.subarray(0, 4).toString("latin1");
+  if (head === "GIF8" || head.startsWith("BM")) return true;
+  if (head === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP") return true;
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") return true;
+  return false;
+}
+async function writeJpeg(buf, filePath) {
+  if (buf.subarray(0, 3).equals(JPEG_MAGIC)) {
+    fs.writeFileSync(filePath, buf);
+    return;
+  }
+  const tmpIn = path.join(os.tmpdir(), `yt-forge-thumb-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(tmpIn, buf);
+  try {
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegPath, [
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        tmpIn,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        // `-update 1` makes image2 write to the literal filename instead of
+        // treating it as a numbered pattern.
+        "-f",
+        "image2",
+        "-update",
+        "1",
+        filePath
+      ], { windowsHide: true }, (err) => err ? reject(err) : resolve());
+    });
+  } catch (e) {
+    console.warn("Thumbnail transcode failed, saving original bytes:", e.message);
+    fs.writeFileSync(filePath, buf);
+  } finally {
+    try {
+      fs.unlinkSync(tmpIn);
+    } catch (e) {
+    }
+  }
 }
 ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
+  if (!url) return { success: false, error: "No thumbnail URL." };
   const safeTitle = safeFileStem(title, "jpg");
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: "Save Thumbnail",
@@ -977,12 +1059,27 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
     filters: [{ name: "JPEG Image", extensions: ["jpg"] }]
   });
   if (canceled || !filePath) return { success: false, error: "Save dialog was canceled." };
-  let result = { success: false, error: "No thumbnail URL." };
+  let buf = null;
+  let lastError = "Download failed.";
   for (const candidate of thumbnailCandidates(url)) {
-    result = await fetchImageToFile(candidate, filePath);
-    if (result.success) break;
+    try {
+      buf = await fetchImageBuffer(candidate);
+      break;
+    } catch (e) {
+      lastError = e.message;
+    }
   }
-  return result;
+  if (!buf) return { success: false, error: lastError };
+  try {
+    await writeJpeg(buf, filePath);
+    return { success: true, path: filePath };
+  } catch (e) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (e2) {
+    }
+    return { success: false, error: e.message };
+  }
 });
 function outputTemplate(filePath) {
   return filePath.replace(/%/g, "%%");
@@ -1267,6 +1364,16 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       },
       get stage() {
         return downloadStage;
+      },
+      // Synchronous best-effort cleanup for app quit. During conversion the
+      // download itself is complete, so the original is kept — the same
+      // choice the in-app cancel dialog defaults to offering.
+      cleanupNow: () => {
+        removeWorkDir(workDir);
+        workDir = null;
+        if (downloadStage !== "converting" && downloadStage !== "done") {
+          deletePartialDownloadFiles(filePath);
+        }
       }
     };
     try {

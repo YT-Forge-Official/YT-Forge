@@ -35,26 +35,39 @@ jobs:
 
       # ... (KEEP ALL YOUR YT-DLP AND NPM CI INSTALL STEPS EXACTLY AS THEY WERE) ...
 
+      # `curl -f` makes a missing asset fail the build instead of silently
+      # packaging a GitHub 404 page where the yt-dlp binary should be.
       - name: Download yt-dlp (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
           mkdir -p bin
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o bin/yt-dlp_macos
+          curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o bin/yt-dlp_macos
           chmod +x bin/yt-dlp_macos
+          ./bin/yt-dlp_macos --version
 
+      # The app always looks for bin/yt-dlp_linux, so the arm64 build downloads
+      # the aarch64 release under that name. yt-dlp's self-updater detects its
+      # own variant at runtime, so the filename does not affect `-U`.
       - name: Download yt-dlp (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           mkdir -p bin
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o bin/yt-dlp_linux
+          case "$(uname -m)" in
+            aarch64|arm64) ASSET=yt-dlp_linux_aarch64 ;;
+            *) ASSET=yt-dlp_linux ;;
+          esac
+          echo "Downloading $ASSET for $(uname -m)"
+          curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$ASSET" -o bin/yt-dlp_linux
           chmod +x bin/yt-dlp_linux
+          ./bin/yt-dlp_linux --version
 
       - name: Download yt-dlp (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: bash
         run: |
           mkdir -p bin
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o bin/yt-dlp.exe
+          curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o bin/yt-dlp.exe
+          ./bin/yt-dlp.exe --version
 
       - name: Install Code Dependencies
         run: npm ci

@@ -150,7 +150,7 @@ const SettingsDialog = () => {
                         size="sm"
                         variant="default"
                         className="h-8 text-xs px-3 shrink-0 gap-1.5"
-                        onClick={() => window.electronAPI.openExternalLink(RELEASES_URL)}
+                        onClick={() => window.electronAPI.openExternalLink('https://yt-forge.com/#download')}
                       >
                         Get Update
                       </Button>
@@ -256,7 +256,7 @@ const SettingsDialog = () => {
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground leading-relaxed">
-                        Sign in to download <strong className="text-foreground/80 font-medium">age-restricted videos</strong>.
+                        Sign in to download <strong className="text-foreground/80 font-medium">age-restricted videos</strong>.<br/>
                         Everything else works without an account.
                       </p>
                     )}

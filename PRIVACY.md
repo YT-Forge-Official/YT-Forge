@@ -1,6 +1,6 @@
 # Privacy
 
-*Last updated: 4 September 2026*
+*Last updated: 6 September 2026*
 
 **YT-Forge has no telemetry, no analytics, and no accounts.** It does not
 report usage, does not count launches, does not send crash reports, and does
@@ -59,15 +59,16 @@ If you do sign in, you should know how it works:
 ## Video thumbnails
 
 Thumbnails shown in the app — in search results, playlists, and your download
-history — are loaded directly from YouTube's image servers (`i.ytimg.com`) as
-normal images, because YT-Forge stores the thumbnail URL rather than a copy of
-the picture.
+history — are loaded directly from the video site's own image servers (for
+YouTube that is `i.ytimg.com`; other sites use their own CDNs) as normal
+images, because YT-Forge stores the thumbnail URL rather than a copy of the
+picture.
 
-This means that opening your History requests those images from Google, which
-reveals your IP address to Google and, through the URLs, which videos are in
-your history. Nothing is uploaded and nothing reaches this project — but "your
-history stays on your computer" would be misleading without this note, so here
-it is.
+This means that opening your History requests those images from the sites you
+downloaded from, which reveals your IP address to them and, through the URLs,
+which of their videos are in your history. Nothing is uploaded and nothing
+reaches this project — but "your history stays on your computer" would be
+misleading without this note, so here it is.
 
 ## Everything else stays on your computer
 

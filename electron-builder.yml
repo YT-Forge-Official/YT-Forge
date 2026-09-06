@@ -4,6 +4,14 @@ icon: build/icon.png
 directories:
   output: release
 
+# ffprobe-static ships a binary for every platform (~300 MB in total). Each
+# platform block below keeps only bin/<platform>/<arch>, the one path
+# ffprobe-static/index.js resolves at runtime. The include lines are repeated
+# on purpose: a platform-specific `files` REPLACES this top-level list (verified
+# 2026-09-06 — negations alone made electron-builder fall back to `**/*` and
+# ship the whole repo, 1.4 GB). There is no arm64 ffprobe for Windows or Linux
+# at all; those builds fall back gracefully (audio is re-encoded instead of
+# stream-copied during H.264 conversion).
 files:
   - dist-electron/**/*
   - dist/**/*
@@ -15,6 +23,12 @@ asarUnpack:
   - "**/node_modules/ffprobe-static/**"
 
 mac:
+  files:
+    - dist-electron/**/*
+    - dist/**/*
+    - package.json
+    - "!**/node_modules/ffprobe-static/bin/!(darwin)/**"
+    - "!**/node_modules/ffprobe-static/bin/darwin/!(${arch})/**"
   target:
     - dmg
     - zip
@@ -24,6 +38,12 @@ mac:
       to: bin/yt-dlp_macos
 
 win:
+  files:
+    - dist-electron/**/*
+    - dist/**/*
+    - package.json
+    - "!**/node_modules/ffprobe-static/bin/!(win32)/**"
+    - "!**/node_modules/ffprobe-static/bin/win32/!(${arch})/**"
   target:
     - nsis
   extraResources:
@@ -35,6 +55,12 @@ nsis:
   perMachine: false
 
 linux:
+  files:
+    - dist-electron/**/*
+    - dist/**/*
+    - package.json
+    - "!**/node_modules/ffprobe-static/bin/!(linux)/**"
+    - "!**/node_modules/ffprobe-static/bin/linux/!(${arch})/**"
   target:
     - AppImage
     - deb

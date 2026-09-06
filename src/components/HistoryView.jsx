@@ -826,7 +826,7 @@ const HistoryView = () => {
           ) : activeJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-1.5">
               <p className="text-sm">Your download history will appear here.</p>
-              <p className="text-xs text-muted-soft">Paste a YouTube link above to get started.</p>
+              <p className="text-xs text-muted-soft">Paste a video link above to get started.</p>
             </div>
           ) : null}
         </div>

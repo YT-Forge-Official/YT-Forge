@@ -41,6 +41,22 @@ const classifyUrl = (url) => {
   return COLLECTION_PATHS.some(re => re.test(u.pathname)) ? 'playlist' : 'video';
 };
 
+// True when `latest` is strictly newer than `current` (dotted numeric
+// versions). A plain inequality told anyone running a build ahead of the
+// newest release — a dev build, a pre-release — to "update".
+const isNewerVersion = (latest, current) => {
+  // Drop any pre-release suffix ("1.1.0-rc.1") so it cannot masquerade as an
+  // extra numeric component and outrank the final release.
+  const nums = (v) => String(v).split('-')[0].split('.').map(n => parseInt(n, 10) || 0);
+  const a = nums(latest);
+  const b = nums(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+};
+
 export const useAppContext = () => {
   const context = useContext(AppContext);
   if (!context) {
@@ -184,7 +200,7 @@ export const AppProvider = ({ children }) => {
           if (!mounted || !data?.tag_name) return;
           const latest = data.tag_name.replace(/^v/, '');
           setLatestVersion(latest);
-          setHasNewVersion(latest !== v);
+          setHasNewVersion(isNewerVersion(latest, v));
           setVersionChecked(true);
         })
         .catch(() => {
