@@ -13,6 +13,7 @@ import { AlertCircle, ArrowLeft, Youtube, Loader2, ListVideo, Film, ChevronRight
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts';
+import { fetchErrorTitle, fetchErrorDetail } from '@/lib/fetchErrors';
 
 const GoogleIcon = (props) => (
   <svg viewBox="0 0 24 24" {...props}>
@@ -156,7 +157,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
 // ─── Main app content ─────────────────────────────────────────────────────────
 const AppContent = () => {
   const {
-    isLoading, videoDetails, playlistDetails, isPlaylistMode, hybridPromptUrl, fetchError,
+    isLoading, videoDetails, playlistDetails, isPlaylistMode, hybridPromptUrl, fetchError, fetchErrorKind,
     goBackToHistory, cancelFetchDetails, handleHybridChoice,
     ytDlpStatus, pendingFetch,
     isAgeRestricted, openSettings,
@@ -236,10 +237,15 @@ const AppContent = () => {
               <AlertCircle className="h-5 w-5 text-destructive" />
             </div>
             <div>
-              <p className="text-sm font-medium text-foreground mb-1">Couldn't fetch video</p>
+              <p className="text-sm font-medium text-foreground mb-1">{fetchErrorTitle(fetchErrorKind)}</p>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                The URL may be invalid, or the video might be unavailable. Please check and try again.
+                {fetchErrorDetail(fetchErrorKind, fetchError)}
               </p>
+              {fetchErrorKind === 'unknown' && fetchError ? null : (
+                <p className="text-[11px] text-muted-foreground/70 leading-relaxed mt-2 break-words">
+                  {fetchError}
+                </p>
+              )}
             </div>
           </div>
           <Button

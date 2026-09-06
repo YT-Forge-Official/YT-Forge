@@ -680,6 +680,293 @@ function getAuthArgs(url) {
 }
 
 // ---------------------------------------------------------------------------
+// PO Tokens
+// ---------------------------------------------------------------------------
+/**
+ * YouTube gates most streaming URLs behind a "Proof of Origin" token. Minting
+ * one means running Google's BotGuard VM — obfuscated JS that needs a real DOM
+ * — so the usual yt-dlp answer is a headless-Chrome or jsdom sidecar. We are
+ * already a browser, so we run the VM in an offscreen window instead (see
+ * src/potoken/) and hand the token to yt-dlp via --extractor-args.
+ *
+ * Without one, a client whose formats need a token yields a single 360p muxed
+ * stream; with one, the full adaptive ladder comes back.
+ *
+ * This is deliberately only reached on the *retry* path: the clients that
+ * serve most videos (tv, web_embedded) need no token at all, so minting on
+ * every fetch would add a BotGuard run per video and buy nothing.
+ */
+
+// Every client that can require a GVS token. android/ios additionally gate the
+// player response itself, hence the extra `.player` entries. One mint covers
+// them all — they share the same content binding.
+const POTOKEN_CLIENTS = ['web', 'web_safari', 'web_creator', 'web_music', 'mweb', 'tv_simply'];
+const POTOKEN_PLAYER_CLIENTS = ['android', 'ios'];
+
+// WAA's integrity token outlives this comfortably; the cap exists so a token
+// minted before a network/account change doesn't linger.
+const POTOKEN_TTL_MS = 60 * 60 * 1000;
+const POTOKEN_IDLE_MS = 5 * 60 * 1000;
+const POTOKEN_MINT_TIMEOUT_MS = 30 * 1000;
+
+// The only hosts the offscreen window is allowed to reach through the bridge.
+const POTOKEN_ALLOWED_ORIGINS = new Set(['https://jnn-pa.googleapis.com', 'https://www.youtube.com']);
+
+let potWindow = null;
+let potWindowPromise = null;
+let potIdleTimer = null;
+const potTokenCache = new Map(); // videoId -> { token, t }
+
+/**
+ * The offscreen window talks to Google's WAA API through here rather than
+ * fetching directly, which keeps it at default security settings — no
+ * disabled webSecurity, no host permissions of its own.
+ */
+ipcMain.handle('potoken:fetch', async (event, url, init = {}) => {
+  if (!potWindow || event.sender !== potWindow.webContents) {
+    return { error: 'not permitted', status: 0, statusText: '', body: '' };
+  }
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (e) {
+    return { error: 'bad url', status: 0, statusText: '', body: '' };
+  }
+  if (!POTOKEN_ALLOWED_ORIGINS.has(origin)) {
+    return { error: `blocked origin ${origin}`, status: 0, statusText: '', body: '' };
+  }
+  try {
+    const res = await net.fetch(url, {
+      method: init.method || 'GET',
+      headers: init.headers || {},
+      body: init.body,
+    });
+    return { status: res.status, statusText: res.statusText, body: await res.text() };
+  } catch (e) {
+    return { error: e.message, status: 0, statusText: '', body: '' };
+  }
+});
+
+function schedulePotWindowTeardown() {
+  if (potIdleTimer) clearTimeout(potIdleTimer);
+  potIdleTimer = setTimeout(() => {
+    potIdleTimer = null;
+    if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
+    potWindow = null;
+  }, POTOKEN_IDLE_MS);
+  // A pending teardown must not hold the app open on quit.
+  if (potIdleTimer.unref) potIdleTimer.unref();
+}
+
+async function getPotWindow() {
+  if (potWindow && !potWindow.isDestroyed()) return potWindow;
+  if (potWindowPromise) return potWindowPromise;
+
+  const dir = path.join(__dirname, 'potoken');
+  potWindowPromise = (async () => {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        preload: path.join(dir, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        // A hidden window gets its timers throttled, and BotGuard leans on
+        // them heavily enough to stall the mint.
+        backgroundThrottling: false,
+      },
+    });
+    win.on('closed', () => { potWindow = null; });
+    // Publish only once the page is up: a concurrent caller that sees
+    // `potWindow` set mid-load would call __mintPoToken before entry.js has
+    // defined it. The IPC bridge keys off the same variable, but nothing
+    // fetches until the mint starts, which is strictly after this point.
+    await win.loadFile(path.join(dir, 'index.html'));
+    potWindow = win;
+    return win;
+  })();
+
+  try {
+    return await potWindowPromise;
+  } catch (err) {
+    if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
+    potWindow = null;
+    throw err;
+  } finally {
+    potWindowPromise = null;
+  }
+}
+
+async function mintPoToken(videoId) {
+  const hit = potTokenCache.get(videoId);
+  if (hit && Date.now() - hit.t < POTOKEN_TTL_MS) {
+    schedulePotWindowTeardown();
+    return hit.token;
+  }
+
+  const win = await getPotWindow();
+  const mint = win.webContents.executeJavaScript(
+    `window.__mintPoToken(${JSON.stringify(videoId)})`, true);
+  const token = await Promise.race([
+    mint,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('PO token mint timed out')), POTOKEN_MINT_TIMEOUT_MS)),
+  ]);
+
+  if (typeof token !== 'string' || !token) throw new Error('PO token mint returned nothing');
+  potTokenCache.set(videoId, { token, t: Date.now() });
+  schedulePotWindowTeardown();
+  return token;
+}
+
+/**
+ * The 11-character id YouTube binds tokens to. Anything else (a playlist page,
+ * a channel URL, another site) has no video-id binding and gets no token.
+ */
+function youTubeVideoId(url) {
+  if (!isYouTubeUrl(url)) return null;
+  const id = videoKeyFromUrl(url);
+  return typeof id === 'string' && /^[\w-]{11}$/.test(id) ? id : null;
+}
+
+function potTokenExtractorValue(token) {
+  return [
+    ...POTOKEN_CLIENTS.map(c => `${c}.gvs+${token}`),
+    ...POTOKEN_PLAYER_CLIENTS.flatMap(c => [`${c}.gvs+${token}`, `${c}.player+${token}`]),
+  ].join(',');
+}
+
+/**
+ * Mints (or reuses) a token for `url` and returns the `po_token=` fragment for
+ * --extractor-args, or null when one isn't applicable or minting failed.
+ * Never throws: a missing token is a missed upgrade, not a failed download.
+ */
+async function getPoTokenArg(url) {
+  const videoId = youTubeVideoId(url);
+  if (!videoId) return null;
+  try {
+    return potTokenExtractorValue(await mintPoToken(videoId));
+  } catch (err) {
+    console.warn('PO token mint failed:', err.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// YouTube player-client retries
+// ---------------------------------------------------------------------------
+/**
+ * Which clients to ask when the default set comes back empty or stripped.
+ *
+ * - RETRY: the historical retry set plus web_music. Measured identical ladder
+ *   to `default,android` on normal videos, so it is a strict superset.
+ * - GATED: age-restricted videos for a signed-in account. Since ~Aug 2026 the
+ *   TV client answers those with "The page needs to be reloaded" and the web
+ *   clients are SABR-only (no URLs at all). web_music is the one client that
+ *   still clears the gate *and* serves downloadable URLs — given a PO token.
+ *   mweb also clears the gate but its age-gated media URLs 403, so it must
+ *   stay out of this list or yt-dlp may pick a dead URL for a shared itag.
+ */
+const YT_RETRY_CLIENTS = 'default,android,web_music';
+const YT_GATED_CLIENTS = 'web_music';
+
+// yt-dlp failure kinds worth a second attempt with the gated client set.
+const YT_RETRYABLE_KINDS = new Set(['age-blocked', 'no-formats', 'bot-check']);
+
+/**
+ * Video id -> the player_client list that produced the formats we showed.
+ * A download re-extracts, so it must ask the *same* clients (with a fresh
+ * token) or the age gate slams shut again between "fetch" and "download".
+ */
+const ytClientOverrides = new Map();
+const YT_CLIENT_OVERRIDES_MAX = 500;
+
+function rememberClientOverride(url, clients) {
+  const videoId = youTubeVideoId(url);
+  if (!videoId) return;
+  if (ytClientOverrides.size >= YT_CLIENT_OVERRIDES_MAX) {
+    ytClientOverrides.delete(ytClientOverrides.keys().next().value);
+  }
+  ytClientOverrides.set(videoId, clients);
+}
+
+/** `--extractor-args` value for a YouTube retry: the client list plus a PO
+ *  token when one can be minted. */
+async function ytExtractorArgs(url, clients) {
+  const poToken = await getPoTokenArg(url);
+  return poToken
+    ? `youtube:player_client=${clients};po_token=${poToken}`
+    : `youtube:player_client=${clients}`;
+}
+
+/** Extra yt-dlp args a download needs to see the same formats the fetch did. */
+async function ytDownloadArgs(url) {
+  const videoId = youTubeVideoId(url);
+  const clients = videoId && ytClientOverrides.get(videoId);
+  if (!clients) return [];
+  return ['--extractor-args', await ytExtractorArgs(url, clients)];
+}
+
+
+// ---------------------------------------------------------------------------
+// Error classification
+// ---------------------------------------------------------------------------
+/**
+ * yt-dlp reports why a fetch failed, but the reasons arrive as raw stderr
+ * ("ERROR: [youtube] abc123: Sorry, this content is age-restricted"). Reduce
+ * that to a stable `kind` the renderer can turn into an explanation, plus a
+ * cleaned-up sentence to fall back on.
+ *
+ * Order matters: the specific patterns have to win over the generic
+ * "Video unavailable" that YouTube attaches to several of them.
+ */
+const YTDLP_ERROR_KINDS = [
+  ['age-signin', /Sign in to confirm your age|confirm your age/i],
+  ['age-blocked', /content is age.restricted|requiring account age.verification/i],
+  ['bot-check', /confirm you'?re not a bot|Sign in to confirm/i],
+  ['members-only', /members.only|available to this channel's members|join this channel/i],
+  ['private', /Private video|This video is private/i],
+  ['geo-blocked', /available in your country|blocked it in your country|geo.?restrict|available from your location|available in your location/i],
+  ['upcoming', /Premieres in|This live event will begin|premiere/i],
+  ['removed', /has been removed|terminated|no longer available|removed by the uploader/i],
+  ['no-formats', /Requested format is not available|Only images are available|SABR|missing a URL/i],
+  ['rate-limited', /HTTP Error 429|Too Many Requests|rate.?limit/i],
+  ['network', /Unable to download|Connection reset|Temporary failure in name resolution|getaddrinfo|timed out|Network is unreachable|SSL|certificate/i],
+  ['unsupported', /Unsupported URL|is not a valid URL|Unable to extract|Unable to recognize/i],
+  ['unavailable', /Video unavailable|This video is unavailable/i],
+];
+
+function classifyYtDlpError(stderr) {
+  for (const [kind, re] of YTDLP_ERROR_KINDS) {
+    if (re.test(stderr)) return kind;
+  }
+  return 'unknown';
+}
+
+/**
+ * Turn multi-line yt-dlp stderr into one sentence: take the last ERROR line
+ * (earlier ones are usually per-client noise) and strip the
+ * "ERROR: [extractor] id:" prefix and any "; please report this" tail.
+ */
+function cleanYtDlpError(stderr) {
+  const lines = String(stderr || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const errorLines = lines.filter(l => l.startsWith('ERROR:'));
+  const line = errorLines.length ? errorLines[errorLines.length - 1] : lines[lines.length - 1] || '';
+  return line
+    .replace(/^ERROR:\s*/, '')
+    .replace(/^\[[^\]]+\]\s*/, '')
+    .replace(/^[\w-]{3,24}:\s*/, '')
+    .replace(/\s*[;.]?\s*(Please report this issue|You might want to use|See\s+https?:\/\/\S+).*$/i, '')
+    .trim() || 'yt-dlp could not read this URL';
+}
+
+function ytDlpError(stderr) {
+  const err = new Error(cleanYtDlpError(stderr));
+  err.kind = classifyYtDlpError(stderr);
+  err.raw = stderr;
+  return err;
+}
+
+// ---------------------------------------------------------------------------
 // Info fetching
 // ---------------------------------------------------------------------------
 async function runYtDlpJson(url, extraArgs = [], silent = false) {
@@ -706,11 +993,7 @@ async function runYtDlpJson(url, extraArgs = [], silent = false) {
         }
       } else {
         const errorMsg = err || `yt-dlp exited with code ${code}`;
-        if (errorMsg.includes("Sign in to confirm your age")) {
-          reject(new Error("AGE_RESTRICTED"));
-        } else {
-          reject(new Error(errorMsg));
-        }
+        reject(ytDlpError(errorMsg));
       }
     });
     proc.on('error', (e) => {
@@ -914,14 +1197,40 @@ function extractFormats(info) {
  * retry's answer would throw away the better one we already had.
  */
 async function fetchVideoInfoWithRetry(url, silent) {
-  const info = await runYtDlpJson(url, [], silent);
+  let info;
+  try {
+    info = await runYtDlpJson(url, [], silent);
+  } catch (err) {
+    // The default clients refused outright. For a signed-in YouTube user that
+    // is almost always the age gate, which only the gated client set (plus a
+    // PO token) gets past. If that fails too, surface the *original* error —
+    // it carries the meaningful classification.
+    if (!isYouTubeUrl(url) || !YT_RETRYABLE_KINDS.has(err.kind)) throw err;
+    let retried;
+    try {
+      retried = await runYtDlpJson(url, ['--extractor-args', await ytExtractorArgs(url, YT_GATED_CLIENTS)], silent);
+    } catch (retryErr) {
+      console.warn('Gated-client retry failed:', retryErr.message);
+      throw err;
+    }
+    rememberClientOverride(url, YT_GATED_CLIENTS);
+    return retried;
+  }
   if (!isYouTubeUrl(url) || !isBasicPlayerResponse(info.formats)) return info;
 
+  // A stripped response usually means the client that answered needs a PO
+  // token. Mint one before retrying so the pot-gated clients are actually
+  // usable; without it the retry can only shuffle between clients that are
+  // equally blocked.
   try {
-    const retried = await runYtDlpJson(url, ['--extractor-args', 'youtube:player_client=default,android'], silent);
+    const retried = await runYtDlpJson(url, ['--extractor-args', await ytExtractorArgs(url, YT_RETRY_CLIENTS)], silent);
     const before = (info.formats || []).length;
     const after = (retried.formats || []).length;
-    return after >= before ? retried : info;
+    if (after >= before) {
+      rememberClientOverride(url, YT_RETRY_CLIENTS);
+      return retried;
+    }
+    return info;
   } catch (retryErr) {
     // Retry failed — carry on with whatever we got the first time
     console.warn('Player-client retry failed, using initial result:', retryErr.message);
@@ -1002,11 +1311,15 @@ ipcMain.handle("get-video-info", async (event, url) => {
 
     return payload;
   } catch (error) {
-    if (error.message === "AGE_RESTRICTED") {
-      return { success: false, isAgeRestricted: true, error: "The content is age-restricted. Please sign in via Google." };
-    }
-    console.error("Error fetching video info:", error);
-    return { success: false, error: error.message };
+    console.error("Error fetching video info:", error.raw || error);
+    return {
+      success: false,
+      error: error.message,
+      errorKind: error.kind || 'unknown',
+      // Only the "not signed in" flavour is fixable by signing in; being
+      // blocked *while* signed in must not send the user back to the login.
+      isAgeRestricted: error.kind === 'age-signin',
+    };
   }
 });
 
@@ -1067,11 +1380,12 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
       videos
     };
   } catch (error) {
-    console.error('Error fetching playlist info:', error);
+    console.error('Error fetching playlist info:', error.raw || error);
     return {
       success: false,
       error: error.message,
-      isAgeRestricted: error.message === 'AGE_RESTRICTED'
+      errorKind: error.kind || 'unknown',
+      isAgeRestricted: error.kind === 'age-signin',
     };
   }
 });
@@ -1180,7 +1494,7 @@ function cachedFormatResult(id) {
  * a single process startup instead of paying ~5-30s of process+challenge
  * overhead per video.
  */
-function streamFormatsBatch(videos, token, onBasicResponse) {
+function streamFormatsBatch(videos, token, onRetry) {
   return new Promise((resolve) => {
     if (videos.length === 0) return resolve();
     const args = [
@@ -1218,8 +1532,8 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
           // whatever the extractor gave us.
           const pageUrl = info.webpage_url || info.original_url;
           const canRetry = pageUrl ? isYouTubeUrl(pageUrl) : isYouTubeUrl(videos[0]?.url);
-          if (canRetry && isBasicPlayerResponse(info.formats) && onBasicResponse) {
-            onBasicResponse(id, pageUrl || `https://www.youtube.com/watch?v=${id}`);
+          if (canRetry && isBasicPlayerResponse(info.formats) && onRetry) {
+            onRetry({ id, url: pageUrl || `https://www.youtube.com/watch?v=${id}`, clients: YT_RETRY_CLIENTS });
           } else {
             cacheFormats(id, result);
           }
@@ -1228,15 +1542,28 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
       }
     });
 
-    proc.stderr.on('data', () => { /* warnings — ignore */ });
+    // --ignore-errors keeps the batch going past a failed video, and yt-dlp
+    // names the video in each ERROR line — enough to tell an age gate (worth
+    // a gated-client retry) from a private or deleted video (not).
+    let errBuf = '';
+    proc.stderr.on('data', (chunk) => { errBuf += chunk.toString(); });
 
     const finish = () => {
       prefetchProcs.delete(proc);
+      const failureKinds = new Map();
+      for (const line of errBuf.split('\n')) {
+        const m = line.match(/^ERROR: \[[^\]]+\] ([\w-]{11}): /);
+        if (m) failureKinds.set(m[1], classifyYtDlpError(line));
+      }
       // Videos the process never produced output for (private, deleted, error)
       for (const v of videos) {
-        if (!received.has(v.id) && token === prefetchToken) {
-          safeSend('playlist-format-result', { id: v.id, success: false, formats: [], audioSize: 0 });
+        if (received.has(v.id) || token !== prefetchToken) continue;
+        if (onRetry && isYouTubeUrl(v.url) && YT_RETRYABLE_KINDS.has(failureKinds.get(v.id))) {
+          // Hold the failure back: the retry reports success or failure itself.
+          onRetry({ id: v.id, url: v.url, clients: YT_GATED_CLIENTS, reportFailure: true });
+          continue;
         }
+        safeSend('playlist-format-result', { id: v.id, success: false, formats: [], audioSize: 0 });
       }
       resolve();
     };
@@ -1272,31 +1599,40 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
   const batches = Array.from({ length: nProcs }, (_, i) => pending.slice(i * per, (i + 1) * per))
     .filter(b => b.length > 0);
 
-  // Videos that returned a stripped player response get a targeted 2nd pass
-  const basicOnes = [];
-  const onBasicResponse = (id, url) => basicOnes.push({ id, url });
+  // Videos that returned a stripped player response, or were refused by the
+  // age gate, get a targeted 2nd pass with an explicit client set.
+  const retries = [];
+  const onRetry = (r) => retries.push(r);
 
   await Promise.all(batches.map(async (batch, i) => {
     if (i > 0) {
       await delay(i * PREFETCH_STAGGER_MS);
       if (token !== prefetchToken) return;
     }
-    return streamFormatsBatch(batch, token, onBasicResponse);
+    return streamFormatsBatch(batch, token, onRetry);
   }));
 
   // Second pass: retry stripped responses with an explicit player client.
   // Sequential — these are extra cold starts, and parallelising them only
   // makes each one finish later.
-  for (const v of basicOnes) {
+  for (const v of retries) {
     if (token !== prefetchToken) break;
+    const failed = () => {
+      // A stripped result was already sent and stays; a held-back gate
+      // failure is reported now that the retry has also come up empty.
+      if (v.reportFailure && token === prefetchToken) {
+        safeSend('playlist-format-result', { id: v.id, success: false, formats: [], audioSize: 0 });
+      }
+    };
     try {
-      const info = await runYtDlpJson(v.url, ['--extractor-args', 'youtube:player_client=default,android'], true);
+      const info = await runYtDlpJson(v.url, ['--extractor-args', await ytExtractorArgs(v.url, v.clients)], true);
       const { formats, audioSize, isAudioOnly } = extractFormats(info);
-      if (formats.length === 0 && !isAudioOnly) continue; // retry came back worse — keep what we sent
+      if (formats.length === 0 && !isAudioOnly) { failed(); continue; }
+      rememberClientOverride(v.url, v.clients);
       const result = { success: true, formats, audioSize, isAudioOnly };
       cacheFormats(v.id, result);
       if (token === prefetchToken) safeSend('playlist-format-result', { id: v.id, ...result });
-    } catch (e) { /* keep the basic result already sent */ }
+    } catch (e) { failed(); }
   }
 
   return { done: true };
@@ -1866,11 +2202,15 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         ...DOWNLOAD_SPEED_ARGS,
       ];
 
-      // NOTE: never override player_client for downloads — when cookies are
-      // present yt-dlp skips the android client, and a reduced client set can
-      // end up with no downloadable formats at all ("Only images are
-      // available"). The height<= relaxation in the selector handles stripped
-      // responses.
+      // NOTE: never override player_client for downloads *by default* — when
+      // cookies are present yt-dlp skips the android client, and a reduced
+      // client set can end up with no downloadable formats at all ("Only
+      // images are available"). The height<= relaxation in the selector
+      // handles stripped responses. The one exception is a video whose info
+      // fetch only succeeded through a retry: the download must replay that
+      // exact client set (and carry a PO token) or it hits the same wall the
+      // first fetch did. Videos that fetched normally add nothing here.
+      args.push(...await ytDownloadArgs(url));
 
       if (type === 'mp3') {
         args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');

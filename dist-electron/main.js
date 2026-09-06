@@ -515,6 +515,179 @@ function getAuthArgs(url) {
   }
   return [];
 }
+const POTOKEN_CLIENTS = ["web", "web_safari", "web_creator", "web_music", "mweb", "tv_simply"];
+const POTOKEN_PLAYER_CLIENTS = ["android", "ios"];
+const POTOKEN_TTL_MS = 60 * 60 * 1e3;
+const POTOKEN_IDLE_MS = 5 * 60 * 1e3;
+const POTOKEN_MINT_TIMEOUT_MS = 30 * 1e3;
+const POTOKEN_ALLOWED_ORIGINS = /* @__PURE__ */ new Set(["https://jnn-pa.googleapis.com", "https://www.youtube.com"]);
+let potWindow = null;
+let potWindowPromise = null;
+let potIdleTimer = null;
+const potTokenCache = /* @__PURE__ */ new Map();
+ipcMain.handle("potoken:fetch", async (event, url, init = {}) => {
+  if (!potWindow || event.sender !== potWindow.webContents) {
+    return { error: "not permitted", status: 0, statusText: "", body: "" };
+  }
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (e) {
+    return { error: "bad url", status: 0, statusText: "", body: "" };
+  }
+  if (!POTOKEN_ALLOWED_ORIGINS.has(origin)) {
+    return { error: `blocked origin ${origin}`, status: 0, statusText: "", body: "" };
+  }
+  try {
+    const res = await net.fetch(url, {
+      method: init.method || "GET",
+      headers: init.headers || {},
+      body: init.body
+    });
+    return { status: res.status, statusText: res.statusText, body: await res.text() };
+  } catch (e) {
+    return { error: e.message, status: 0, statusText: "", body: "" };
+  }
+});
+function schedulePotWindowTeardown() {
+  if (potIdleTimer) clearTimeout(potIdleTimer);
+  potIdleTimer = setTimeout(() => {
+    potIdleTimer = null;
+    if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
+    potWindow = null;
+  }, POTOKEN_IDLE_MS);
+  if (potIdleTimer.unref) potIdleTimer.unref();
+}
+async function getPotWindow() {
+  if (potWindow && !potWindow.isDestroyed()) return potWindow;
+  if (potWindowPromise) return potWindowPromise;
+  const dir = path.join(__dirname, "potoken");
+  potWindowPromise = (async () => {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        preload: path.join(dir, "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        // A hidden window gets its timers throttled, and BotGuard leans on
+        // them heavily enough to stall the mint.
+        backgroundThrottling: false
+      }
+    });
+    win.on("closed", () => {
+      potWindow = null;
+    });
+    await win.loadFile(path.join(dir, "index.html"));
+    potWindow = win;
+    return win;
+  })();
+  try {
+    return await potWindowPromise;
+  } catch (err) {
+    if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
+    potWindow = null;
+    throw err;
+  } finally {
+    potWindowPromise = null;
+  }
+}
+async function mintPoToken(videoId) {
+  const hit = potTokenCache.get(videoId);
+  if (hit && Date.now() - hit.t < POTOKEN_TTL_MS) {
+    schedulePotWindowTeardown();
+    return hit.token;
+  }
+  const win = await getPotWindow();
+  const mint = win.webContents.executeJavaScript(
+    `window.__mintPoToken(${JSON.stringify(videoId)})`,
+    true
+  );
+  const token = await Promise.race([
+    mint,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("PO token mint timed out")), POTOKEN_MINT_TIMEOUT_MS))
+  ]);
+  if (typeof token !== "string" || !token) throw new Error("PO token mint returned nothing");
+  potTokenCache.set(videoId, { token, t: Date.now() });
+  schedulePotWindowTeardown();
+  return token;
+}
+function youTubeVideoId(url) {
+  if (!isYouTubeUrl(url)) return null;
+  const id = videoKeyFromUrl(url);
+  return typeof id === "string" && /^[\w-]{11}$/.test(id) ? id : null;
+}
+function potTokenExtractorValue(token) {
+  return [
+    ...POTOKEN_CLIENTS.map((c) => `${c}.gvs+${token}`),
+    ...POTOKEN_PLAYER_CLIENTS.flatMap((c) => [`${c}.gvs+${token}`, `${c}.player+${token}`])
+  ].join(",");
+}
+async function getPoTokenArg(url) {
+  const videoId = youTubeVideoId(url);
+  if (!videoId) return null;
+  try {
+    return potTokenExtractorValue(await mintPoToken(videoId));
+  } catch (err) {
+    console.warn("PO token mint failed:", err.message);
+    return null;
+  }
+}
+const YT_RETRY_CLIENTS = "default,android,web_music";
+const YT_GATED_CLIENTS = "web_music";
+const YT_RETRYABLE_KINDS = /* @__PURE__ */ new Set(["age-blocked", "no-formats", "bot-check"]);
+const ytClientOverrides = /* @__PURE__ */ new Map();
+const YT_CLIENT_OVERRIDES_MAX = 500;
+function rememberClientOverride(url, clients) {
+  const videoId = youTubeVideoId(url);
+  if (!videoId) return;
+  if (ytClientOverrides.size >= YT_CLIENT_OVERRIDES_MAX) {
+    ytClientOverrides.delete(ytClientOverrides.keys().next().value);
+  }
+  ytClientOverrides.set(videoId, clients);
+}
+async function ytExtractorArgs(url, clients) {
+  const poToken = await getPoTokenArg(url);
+  return poToken ? `youtube:player_client=${clients};po_token=${poToken}` : `youtube:player_client=${clients}`;
+}
+async function ytDownloadArgs(url) {
+  const videoId = youTubeVideoId(url);
+  const clients = videoId && ytClientOverrides.get(videoId);
+  if (!clients) return [];
+  return ["--extractor-args", await ytExtractorArgs(url, clients)];
+}
+const YTDLP_ERROR_KINDS = [
+  ["age-signin", /Sign in to confirm your age|confirm your age/i],
+  ["age-blocked", /content is age.restricted|requiring account age.verification/i],
+  ["bot-check", /confirm you'?re not a bot|Sign in to confirm/i],
+  ["members-only", /members.only|available to this channel's members|join this channel/i],
+  ["private", /Private video|This video is private/i],
+  ["geo-blocked", /available in your country|blocked it in your country|geo.?restrict|available from your location|available in your location/i],
+  ["upcoming", /Premieres in|This live event will begin|premiere/i],
+  ["removed", /has been removed|terminated|no longer available|removed by the uploader/i],
+  ["no-formats", /Requested format is not available|Only images are available|SABR|missing a URL/i],
+  ["rate-limited", /HTTP Error 429|Too Many Requests|rate.?limit/i],
+  ["network", /Unable to download|Connection reset|Temporary failure in name resolution|getaddrinfo|timed out|Network is unreachable|SSL|certificate/i],
+  ["unsupported", /Unsupported URL|is not a valid URL|Unable to extract|Unable to recognize/i],
+  ["unavailable", /Video unavailable|This video is unavailable/i]
+];
+function classifyYtDlpError(stderr) {
+  for (const [kind, re] of YTDLP_ERROR_KINDS) {
+    if (re.test(stderr)) return kind;
+  }
+  return "unknown";
+}
+function cleanYtDlpError(stderr) {
+  const lines = String(stderr || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const errorLines = lines.filter((l) => l.startsWith("ERROR:"));
+  const line = errorLines.length ? errorLines[errorLines.length - 1] : lines[lines.length - 1] || "";
+  return line.replace(/^ERROR:\s*/, "").replace(/^\[[^\]]+\]\s*/, "").replace(/^[\w-]{3,24}:\s*/, "").replace(/\s*[;.]?\s*(Please report this issue|You might want to use|See\s+https?:\/\/\S+).*$/i, "").trim() || "yt-dlp could not read this URL";
+}
+function ytDlpError(stderr) {
+  const err = new Error(cleanYtDlpError(stderr));
+  err.kind = classifyYtDlpError(stderr);
+  err.raw = stderr;
+  return err;
+}
 async function runYtDlpJson(url, extraArgs = [], silent = false) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ytDlpBinaryPath, [
@@ -543,11 +716,7 @@ async function runYtDlpJson(url, extraArgs = [], silent = false) {
         }
       } else {
         const errorMsg = err || `yt-dlp exited with code ${code}`;
-        if (errorMsg.includes("Sign in to confirm your age")) {
-          reject(new Error("AGE_RESTRICTED"));
-        } else {
-          reject(new Error(errorMsg));
-        }
+        reject(ytDlpError(errorMsg));
       }
     });
     proc.on("error", (e) => {
@@ -656,13 +825,31 @@ function extractFormats(info) {
   };
 }
 async function fetchVideoInfoWithRetry(url, silent) {
-  const info = await runYtDlpJson(url, [], silent);
+  let info;
+  try {
+    info = await runYtDlpJson(url, [], silent);
+  } catch (err) {
+    if (!isYouTubeUrl(url) || !YT_RETRYABLE_KINDS.has(err.kind)) throw err;
+    let retried;
+    try {
+      retried = await runYtDlpJson(url, ["--extractor-args", await ytExtractorArgs(url, YT_GATED_CLIENTS)], silent);
+    } catch (retryErr) {
+      console.warn("Gated-client retry failed:", retryErr.message);
+      throw err;
+    }
+    rememberClientOverride(url, YT_GATED_CLIENTS);
+    return retried;
+  }
   if (!isYouTubeUrl(url) || !isBasicPlayerResponse(info.formats)) return info;
   try {
-    const retried = await runYtDlpJson(url, ["--extractor-args", "youtube:player_client=default,android"], silent);
+    const retried = await runYtDlpJson(url, ["--extractor-args", await ytExtractorArgs(url, YT_RETRY_CLIENTS)], silent);
     const before = (info.formats || []).length;
     const after = (retried.formats || []).length;
-    return after >= before ? retried : info;
+    if (after >= before) {
+      rememberClientOverride(url, YT_RETRY_CLIENTS);
+      return retried;
+    }
+    return info;
   } catch (retryErr) {
     console.warn("Player-client retry failed, using initial result:", retryErr.message);
     return info;
@@ -725,11 +912,15 @@ ipcMain.handle("get-video-info", async (event, url) => {
     if (info.id) cacheFormats(info.id, { success: true, formats, audioSize, isAudioOnly });
     return payload;
   } catch (error) {
-    if (error.message === "AGE_RESTRICTED") {
-      return { success: false, isAgeRestricted: true, error: "The content is age-restricted. Please sign in via Google." };
-    }
-    console.error("Error fetching video info:", error);
-    return { success: false, error: error.message };
+    console.error("Error fetching video info:", error.raw || error);
+    return {
+      success: false,
+      error: error.message,
+      errorKind: error.kind || "unknown",
+      // Only the "not signed in" flavour is fixable by signing in; being
+      // blocked *while* signed in must not send the user back to the login.
+      isAgeRestricted: error.kind === "age-signin"
+    };
   }
 });
 ipcMain.handle("get-playlist-info", async (event, url) => {
@@ -772,11 +963,12 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
       videos
     };
   } catch (error) {
-    console.error("Error fetching playlist info:", error);
+    console.error("Error fetching playlist info:", error.raw || error);
     return {
       success: false,
       error: error.message,
-      isAgeRestricted: error.message === "AGE_RESTRICTED"
+      errorKind: error.kind || "unknown",
+      isAgeRestricted: error.kind === "age-signin"
     };
   }
 });
@@ -847,7 +1039,7 @@ function cachedFormatResult(id) {
   const { t, ...rest } = formatCache.get(id);
   return rest;
 }
-function streamFormatsBatch(videos, token, onBasicResponse) {
+function streamFormatsBatch(videos, token, onRetry) {
   return new Promise((resolve) => {
     var _a;
     if (videos.length === 0) return resolve();
@@ -880,8 +1072,8 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
           const result = { success: true, formats, audioSize, isAudioOnly };
           const pageUrl = info.webpage_url || info.original_url;
           const canRetry = pageUrl ? isYouTubeUrl(pageUrl) : isYouTubeUrl((_a2 = videos[0]) == null ? void 0 : _a2.url);
-          if (canRetry && isBasicPlayerResponse(info.formats) && onBasicResponse) {
-            onBasicResponse(id, pageUrl || `https://www.youtube.com/watch?v=${id}`);
+          if (canRetry && isBasicPlayerResponse(info.formats) && onRetry) {
+            onRetry({ id, url: pageUrl || `https://www.youtube.com/watch?v=${id}`, clients: YT_RETRY_CLIENTS });
           } else {
             cacheFormats(id, result);
           }
@@ -890,14 +1082,24 @@ function streamFormatsBatch(videos, token, onBasicResponse) {
         }
       }
     });
-    proc.stderr.on("data", () => {
+    let errBuf = "";
+    proc.stderr.on("data", (chunk) => {
+      errBuf += chunk.toString();
     });
     const finish = () => {
       prefetchProcs.delete(proc);
+      const failureKinds = /* @__PURE__ */ new Map();
+      for (const line of errBuf.split("\n")) {
+        const m = line.match(/^ERROR: \[[^\]]+\] ([\w-]{11}): /);
+        if (m) failureKinds.set(m[1], classifyYtDlpError(line));
+      }
       for (const v of videos) {
-        if (!received.has(v.id) && token === prefetchToken) {
-          safeSend("playlist-format-result", { id: v.id, success: false, formats: [], audioSize: 0 });
+        if (received.has(v.id) || token !== prefetchToken) continue;
+        if (onRetry && isYouTubeUrl(v.url) && YT_RETRYABLE_KINDS.has(failureKinds.get(v.id))) {
+          onRetry({ id: v.id, url: v.url, clients: YT_GATED_CLIENTS, reportFailure: true });
+          continue;
         }
+        safeSend("playlist-format-result", { id: v.id, success: false, formats: [], audioSize: 0 });
       }
       resolve();
     };
@@ -924,25 +1126,35 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
   );
   const per = Math.ceil(pending.length / nProcs);
   const batches = Array.from({ length: nProcs }, (_, i) => pending.slice(i * per, (i + 1) * per)).filter((b) => b.length > 0);
-  const basicOnes = [];
-  const onBasicResponse = (id, url) => basicOnes.push({ id, url });
+  const retries = [];
+  const onRetry = (r) => retries.push(r);
   await Promise.all(batches.map(async (batch, i) => {
     if (i > 0) {
       await delay(i * PREFETCH_STAGGER_MS);
       if (token !== prefetchToken) return;
     }
-    return streamFormatsBatch(batch, token, onBasicResponse);
+    return streamFormatsBatch(batch, token, onRetry);
   }));
-  for (const v of basicOnes) {
+  for (const v of retries) {
     if (token !== prefetchToken) break;
+    const failed = () => {
+      if (v.reportFailure && token === prefetchToken) {
+        safeSend("playlist-format-result", { id: v.id, success: false, formats: [], audioSize: 0 });
+      }
+    };
     try {
-      const info = await runYtDlpJson(v.url, ["--extractor-args", "youtube:player_client=default,android"], true);
+      const info = await runYtDlpJson(v.url, ["--extractor-args", await ytExtractorArgs(v.url, v.clients)], true);
       const { formats, audioSize, isAudioOnly } = extractFormats(info);
-      if (formats.length === 0 && !isAudioOnly) continue;
+      if (formats.length === 0 && !isAudioOnly) {
+        failed();
+        continue;
+      }
+      rememberClientOverride(v.url, v.clients);
       const result = { success: true, formats, audioSize, isAudioOnly };
       cacheFormats(v.id, result);
       if (token === prefetchToken) safeSend("playlist-format-result", { id: v.id, ...result });
     } catch (e) {
+      failed();
     }
   }
   return { done: true };
@@ -1407,6 +1619,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
         ...BASE_ARGS,
         ...DOWNLOAD_SPEED_ARGS
       ];
+      args.push(...await ytDownloadArgs(url));
       if (type === "mp3") {
         args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
       } else {

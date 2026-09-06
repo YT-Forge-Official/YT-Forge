@@ -73,6 +73,9 @@ export const AppProvider = ({ children }) => {
   const [history, setHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState(null);
+  // Which *kind* of failure it was ('age-blocked', 'private', 'geo-blocked'...),
+  // so the error view can explain it instead of guessing at a bad URL.
+  const [fetchErrorKind, setFetchErrorKind] = useState(null);
   const [ytDlpStatus, setYtDlpStatus] = useState(null);
   // True when user clicked "Get Video" while yt-dlp was still updating
   const [pendingFetch, setPendingFetch] = useState(false);
@@ -216,6 +219,7 @@ export const AppProvider = ({ children }) => {
     if (!currentUrl) return;
     setIsLoading(true);
     setFetchError(null);
+    setFetchErrorKind(null);
     setIsAgeRestricted(false);
     setIsPlaylistMode(false);
     setBoundJobId(null);
@@ -235,12 +239,14 @@ export const AppProvider = ({ children }) => {
           setIsAuthenticated(false);
         }
         setFetchError(result.error);
+        setFetchErrorKind(result.errorKind || 'unknown');
       }
     } catch (error) {
       if (currentFetchId !== fetchIdRef.current) return;
       console.error("Failed to fetch video details:", error);
       setVideoDetails(null);
       setFetchError(error.message || 'Something went wrong');
+      setFetchErrorKind('unknown');
     } finally {
       if (currentFetchId === fetchIdRef.current) {
         setIsLoading(false);
@@ -256,6 +262,7 @@ export const AppProvider = ({ children }) => {
       setPendingFetch(true);
       setIsLoading(true);
       setFetchError(null);
+    setFetchErrorKind(null);
 
       if (classifyUrl(urlRef.current) === 'playlist') {
         setIsPlaylistMode(true);
@@ -291,6 +298,7 @@ export const AppProvider = ({ children }) => {
     if (!currentUrl) return;
     setIsLoading(true);
     setFetchError(null);
+    setFetchErrorKind(null);
     setIsAgeRestricted(false);
     setIsPlaylistMode(true);
     setBoundJobId(null);
@@ -309,12 +317,14 @@ export const AppProvider = ({ children }) => {
           setIsAuthenticated(false);
         }
         setFetchError(result.error);
+        setFetchErrorKind(result.errorKind || 'unknown');
       }
     } catch (error) {
       if (currentFetchId !== fetchIdRef.current) return;
       console.error("Failed to fetch playlist details:", error);
       setPlaylistDetails(null);
       setFetchError(error.message || 'Something went wrong');
+      setFetchErrorKind('unknown');
     } finally {
       if (currentFetchId === fetchIdRef.current) {
         setIsLoading(false);
@@ -352,6 +362,7 @@ export const AppProvider = ({ children }) => {
     setIsPlaylistMode(false);
     setHybridPromptUrl(null);
     setFetchError(null);
+    setFetchErrorKind(null);
     setIsAgeRestricted(false);
     setPendingFetch(false);
     setIsLoading(false);
@@ -373,6 +384,7 @@ export const AppProvider = ({ children }) => {
       setIsPlaylistMode(false);
       setHybridPromptUrl(null);
       setFetchError(null);
+    setFetchErrorKind(null);
       setIsAgeRestricted(false);
       setBoundJobId(null);
     }
@@ -389,6 +401,7 @@ export const AppProvider = ({ children }) => {
    */
   const viewJob = (job) => {
     setFetchError(null);
+    setFetchErrorKind(null);
     setHybridPromptUrl(null);
     setIsAgeRestricted(false);
     setIsLoading(false);
@@ -434,6 +447,7 @@ export const AppProvider = ({ children }) => {
     history,
     isLoading,
     fetchError,
+    fetchErrorKind,
     ytDlpStatus,
     pendingFetch,
     isYtDlpBusy,
