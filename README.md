@@ -84,7 +84,15 @@ Because this is an independent source-available application without enterprise c
 `More Info` → `Run Anyway`
 
 **macOS:**  
-`System Settings → Privacy & Security → Open Anyway`
+Open the app once, dismiss the warning, then go to  
+`System Settings → Privacy & Security` and click **Open Anyway** next to the YT-Forge message.
+
+If macOS instead says the app *"is damaged and can't be opened"*, the download was
+flagged by quarantine. Clear it with:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/YT-Forge.app
+```
 
 This approval is required **only once**.
 

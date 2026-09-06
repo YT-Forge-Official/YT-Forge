@@ -23,6 +23,19 @@ asarUnpack:
   - "**/node_modules/ffprobe-static/**"
 
 mac:
+  # There is no Developer ID certificate for this project, and with no `identity`
+  # set electron-builder skips signing *entirely* (MacTargetHelper.findSigningIdentity
+  # falls through to `noIdentity` and returns null). The bundle then ships carrying
+  # only Electron's upstream linker signature, whose seal references a
+  # _CodeSignature directory that no longer exists after repacking — macOS calls
+  # that "damaged and can't be opened" and offers no Open Anyway path. The literal
+  # "-" is the only value that makes electron-builder ad-hoc sign the whole bundle,
+  # which produces a valid seal. (`identity: null` means skip, not ad-hoc.)
+  identity: "-"
+  # Hardened runtime only buys anything alongside notarization, which needs the
+  # Developer ID we do not have. With ad-hoc signing it additionally turns on
+  # library validation — electron-builder warns about exactly this combination.
+  hardenedRuntime: false
   files:
     - dist-electron/**/*
     - dist/**/*
