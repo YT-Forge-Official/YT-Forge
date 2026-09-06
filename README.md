@@ -14,8 +14,7 @@
 
   <p>
     <a href="https://yt-forge.com/"><strong>yt-forge.com</strong></a>
-    &nbsp;•&nbsp;
-    <a href="https://github.com/YT-Forge-Official/YT-Forge/releases/latest">Download</a>
+
   </p>
 </div>
 
@@ -72,7 +71,7 @@ Unlike many downloaders, YT-FORGE prioritizes **H.264 video and AAC audio** form
 
 | OS | Hardware / Architecture | Direct Download (v2.0.1) |
 |--------|---------------------|--------------------------|
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | [Download .dmg](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/YT-Forge-2.0.1-arm64.dmg) |
+| **macOS** | Apple Silicon (M Series) | [Download .dmg](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/YT-Forge-2.0.1-arm64.dmg) |
 | **Windows** | Intel / AMD & Snapdragon (ARM) | [Download .exe](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/YT-Forge-Setup-2.0.1.exe) |
 | **Linux** | Intel / AMD (Standard PCs) | [.AppImage](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/YT-Forge-2.0.1.AppImage) &nbsp;·&nbsp; [.deb](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/yt-forge_2.0.1_amd64.deb) |
 | **Linux** | ARM Devices (Raspberry Pi, etc.)| [.AppImage](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/YT-Forge-2.0.1-arm64.AppImage) &nbsp;·&nbsp; [.deb](https://github.com/YT-Forge-Official/YT-Forge/releases/download/v2.0.1/yt-forge_2.0.1_arm64.deb) |
