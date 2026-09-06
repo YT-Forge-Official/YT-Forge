@@ -159,7 +159,12 @@ function getBundledBinaryPath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'bin', getBinaryName());
   }
-  return path.join(app.getAppPath(), 'bin', getBinaryName());
+  // The repo keeps one Linux build per CPU (electron-builder installs the
+  // right one as plain `yt-dlp_linux` at package time); in dev pick it here.
+  const devName = process.platform === 'linux'
+    ? `yt-dlp_linux_${process.arch === 'arm64' ? 'arm64' : 'x64'}`
+    : getBinaryName();
+  return path.join(app.getAppPath(), 'bin', devName);
 }
 
 function getWritableBinaryPath() {
@@ -377,6 +382,11 @@ function createWindow() {
     if (!target.startsWith(rendererUrl)) event.preventDefault();
   });
 
+  // The offscreen PO-token window is an implementation detail of this one:
+  // it must never be the last window standing, or window-all-closed would
+  // wait on its idle timer and the app would linger invisibly after close.
+  mainWindow.on('closed', destroyPotWindow);
+
   if (!app.isPackaged) {
     mainWindow.loadURL(rendererUrl);
   } else {
@@ -422,6 +432,7 @@ app.on("window-all-closed", () => {
 
 // Clean up paused downloads on quit — a SIGSTOPped process can't handle SIGTERM
 app.on('before-quit', () => {
+  destroyPotWindow();
   downloadQueue.forEach(j => { j.cancelled = true; });
   if (activeCtl) {
     activeCtl.cancel();
@@ -435,7 +446,9 @@ app.on('before-quit', () => {
   }
 });
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  // Count the main window specifically — a helper window (sign-in, PO token)
+  // must not stop the dock icon from bringing the app back.
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
 });
 
 const formatBytes = (bytes, decimals = 2) => {
@@ -747,13 +760,15 @@ ipcMain.handle('potoken:fetch', async (event, url, init = {}) => {
   }
 });
 
+function destroyPotWindow() {
+  if (potIdleTimer) { clearTimeout(potIdleTimer); potIdleTimer = null; }
+  if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
+  potWindow = null;
+}
+
 function schedulePotWindowTeardown() {
   if (potIdleTimer) clearTimeout(potIdleTimer);
-  potIdleTimer = setTimeout(() => {
-    potIdleTimer = null;
-    if (potWindow && !potWindow.isDestroyed()) potWindow.destroy();
-    potWindow = null;
-  }, POTOKEN_IDLE_MS);
+  potIdleTimer = setTimeout(destroyPotWindow, POTOKEN_IDLE_MS);
   // A pending teardown must not hold the app open on quit.
   if (potIdleTimer.unref) potIdleTimer.unref();
 }
@@ -857,17 +872,23 @@ async function getPoTokenArg(url) {
 /**
  * Which clients to ask when the default set comes back empty or stripped.
  *
- * - RETRY: the historical retry set plus web_music. Measured identical ladder
- *   to `default,android` on normal videos, so it is a strict superset.
- * - GATED: age-restricted videos for a signed-in account. Since ~Aug 2026 the
- *   TV client answers those with "The page needs to be reloaded" and the web
- *   clients are SABR-only (no URLs at all). web_music is the one client that
- *   still clears the gate *and* serves downloadable URLs — given a PO token.
- *   mweb also clears the gate but its age-gated media URLs 403, so it must
- *   stay out of this list or yt-dlp may pick a dead URL for a shared itag.
+ * It is the historical `default,android` plus web_music, and it is used for
+ * every retry — a stripped response, an age gate, a bot check. One list rather
+ * than one per symptom, because the additions are strictly free: measured
+ * identical ladders to `default,android` on normal videos, and identical to
+ * web_music alone on age-gated ones (15 formats, 1608p), downloading cleanly
+ * at every quality rung.
+ *
+ * web_music is the load-bearing entry. Since ~Aug 2026 the TV client answers
+ * age-gated videos with "The page needs to be reloaded" and the plain web
+ * clients are SABR-only (no URLs at all); web_music is the one client that
+ * still clears the gate *and* serves downloadable URLs — given a PO token.
+ *
+ * mweb is deliberately absent. It also clears the gate and looks healthy in
+ * `-J`, but its age-gated media URLs 403, so including it risks yt-dlp
+ * choosing a dead URL for an itag another client also offers.
  */
 const YT_RETRY_CLIENTS = 'default,android,web_music';
-const YT_GATED_CLIENTS = 'web_music';
 
 // yt-dlp failure kinds worth a second attempt with the gated client set.
 const YT_RETRYABLE_KINDS = new Set(['age-blocked', 'no-formats', 'bot-check']);
@@ -1208,12 +1229,12 @@ async function fetchVideoInfoWithRetry(url, silent) {
     if (!isYouTubeUrl(url) || !YT_RETRYABLE_KINDS.has(err.kind)) throw err;
     let retried;
     try {
-      retried = await runYtDlpJson(url, ['--extractor-args', await ytExtractorArgs(url, YT_GATED_CLIENTS)], silent);
+      retried = await runYtDlpJson(url, ['--extractor-args', await ytExtractorArgs(url, YT_RETRY_CLIENTS)], silent);
     } catch (retryErr) {
-      console.warn('Gated-client retry failed:', retryErr.message);
+      console.warn('Retry with explicit client set failed:', retryErr.message);
       throw err;
     }
-    rememberClientOverride(url, YT_GATED_CLIENTS);
+    rememberClientOverride(url, YT_RETRY_CLIENTS);
     return retried;
   }
   if (!isYouTubeUrl(url) || !isBasicPlayerResponse(info.formats)) return info;
@@ -1560,7 +1581,7 @@ function streamFormatsBatch(videos, token, onRetry) {
         if (received.has(v.id) || token !== prefetchToken) continue;
         if (onRetry && isYouTubeUrl(v.url) && YT_RETRYABLE_KINDS.has(failureKinds.get(v.id))) {
           // Hold the failure back: the retry reports success or failure itself.
-          onRetry({ id: v.id, url: v.url, clients: YT_GATED_CLIENTS, reportFailure: true });
+          onRetry({ id: v.id, url: v.url, clients: YT_RETRY_CLIENTS, reportFailure: true });
           continue;
         }
         safeSend('playlist-format-result', { id: v.id, success: false, formats: [], audioSize: 0 });
@@ -2670,8 +2691,33 @@ function addPlaylistHistoryItem(job) {
   safeSend('history-updated');
 }
 
+/**
+ * runVideoDownloadCore, plus the same second chance the info fetch gets: if
+ * YouTube's default clients refuse the video (age gate, no formats) and no
+ * client override is known for it yet, retry once with the gated client set
+ * and a PO token. Needed because a download re-extracts from scratch — a
+ * playlist item the prefetch never reached, or a re-download after a restart,
+ * arrives here with no override even though the fetch path would have found
+ * one. Cancels and non-YouTube failures pass straight through.
+ */
+async function runVideoDownload(opts) {
+  const result = await runVideoDownloadCore(opts);
+  if (result.success || result.keptOriginal || result.cancelled) return result;
+  if (opts.job?.cancelled) return result;
+  const videoId = youTubeVideoId(opts.url);
+  if (!videoId || ytClientOverrides.has(videoId)) return result;
+  if (!YT_RETRYABLE_KINDS.has(classifyYtDlpError(result.error || ''))) return result;
+
+  console.log('Download refused by default clients, retrying with explicit client set:', videoId);
+  rememberClientOverride(opts.url, YT_RETRY_CLIENTS);
+  const retried = await runVideoDownloadCore(opts);
+  // Don't pin a client set that didn't help — the next attempt should start clean.
+  if (!retried.success && !retried.keptOriginal) ytClientOverrides.delete(videoId);
+  return retried;
+}
+
 async function runVideoJob(job) {
-  const result = await runVideoDownloadCore({
+  const result = await runVideoDownload({
     url: job.url,
     quality: job.quality,
     type: job.type,
@@ -2707,7 +2753,7 @@ async function runPlaylistJob(job) {
     const ext = item.type === 'mp3' ? 'mp3' : 'mp4';
     const filePath = resolveOutputPath(job.targetDir, item.title, ext, job.allowDuplicates);
 
-    const result = await runVideoDownloadCore({
+    const result = await runVideoDownload({
       url: item.url,
       quality: item.quality,
       type: item.type,

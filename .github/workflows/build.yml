@@ -45,21 +45,23 @@ jobs:
           chmod +x bin/yt-dlp_macos
           ./bin/yt-dlp_macos --version
 
-      # The app always looks for bin/yt-dlp_linux, so the arm64 build downloads
-      # the aarch64 release under that name. yt-dlp's self-updater detects its
-      # own variant at runtime, so the filename does not affect `-U`.
+      # electron-builder.yml installs bin/yt-dlp_linux_${arch} as
+      # resources/bin/yt-dlp_linux, so the download has to land under the
+      # per-CPU name or the packaging step ships the stale binary from git
+      # (x64) or fails outright (arm64). yt-dlp's self-updater detects its own
+      # variant at runtime, so the filename does not affect `-U`.
       - name: Download yt-dlp (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           mkdir -p bin
           case "$(uname -m)" in
-            aarch64|arm64) ASSET=yt-dlp_linux_aarch64 ;;
-            *) ASSET=yt-dlp_linux ;;
+            aarch64|arm64) ASSET=yt-dlp_linux_aarch64; DEST=bin/yt-dlp_linux_arm64 ;;
+            *) ASSET=yt-dlp_linux; DEST=bin/yt-dlp_linux_x64 ;;
           esac
-          echo "Downloading $ASSET for $(uname -m)"
-          curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$ASSET" -o bin/yt-dlp_linux
-          chmod +x bin/yt-dlp_linux
-          ./bin/yt-dlp_linux --version
+          echo "Downloading $ASSET for $(uname -m) -> $DEST"
+          curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$ASSET" -o "$DEST"
+          chmod +x "$DEST"
+          "./$DEST" --version
 
       - name: Download yt-dlp (Windows)
         if: startsWith(matrix.os, 'windows')

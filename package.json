@@ -21,7 +21,8 @@
     "landing:build": "npm --prefix landing run build",
     "landing:start": "npm --prefix landing run start",
     "landing:install": "npm --prefix landing install",
-    "build:potoken": "vite build --config vite.potoken.config.mjs"
+    "build:potoken": "vite build --config vite.potoken.config.mjs",
+    "ytdlp:update": "node scripts/update-ytdlp.mjs"
   },
   "keywords": [
     "youtube-downloader",

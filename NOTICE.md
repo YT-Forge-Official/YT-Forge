@@ -36,6 +36,36 @@ SOFTWARE.
 
 ---
 
+## Bundled libraries
+
+The following library is compiled into YT-Forge's own JavaScript at build time.
+
+### BgUtils (`bgutils-js`)
+
+Used to obtain YouTube "Proof of Origin" tokens by running Google's BotGuard attestation in an
+offscreen window (see `src/potoken/`). MIT licensed. <https://github.com/LuanRT/BgUtils>
+
+MIT License
+
+Copyright (c) 2024 LuanRT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
 ## Bundled executables
 
 YT-Forge invokes the following programs as separate executables via the command line. They are
@@ -43,7 +73,8 @@ aggregated with YT-Forge, not linked into it, and each remains under its own lic
 
 ### yt-dlp
 
-Bundled in `bin/`. Released into the public domain under The Unlicense.
+Bundled in `bin/` (one standalone build per platform and CPU: `yt-dlp_macos`, `yt-dlp.exe`,
+`yt-dlp_linux_x64`, `yt-dlp_linux_arm64`). Released into the public domain under The Unlicense.
 <https://github.com/yt-dlp/yt-dlp>
 
 ### FFmpeg and FFprobe

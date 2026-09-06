@@ -17,7 +17,8 @@ const FETCH_ERRORS = {
   },
   'bot-check': {
     title: 'YouTube wants to verify you',
-    detail: 'YouTube is asking to confirm the request is not automated. Signing in from Settings usually clears it.',
+    detail:
+      "YouTube is asking to confirm this request isn't automated. It does that when an address is shared by a lot of people, so a VPN or a company network is the usual cause. Signing in from Settings normally clears it — and if you are on a VPN and it persists, turning the VPN off for the download will.",
   },
   'members-only': {
     title: 'Members-only video',
@@ -41,11 +42,13 @@ const FETCH_ERRORS = {
   },
   'no-formats': {
     title: 'No downloadable formats',
-    detail: 'The site returned the page but no usable video or audio streams for it.',
+    detail:
+      'The site returned the page but no usable video or audio streams for it. If you are on a VPN, trying again without it is worth a shot — some sites hold streams back from shared addresses.',
   },
   'rate-limited': {
     title: 'Too many requests',
-    detail: 'The site is rate-limiting this connection. Wait a few minutes before trying again.',
+    detail:
+      'The site is rate-limiting this connection. Wait a few minutes before trying again. On a VPN this can happen sooner, because the limit is counted per address and you are sharing yours.',
   },
   network: {
     title: "Couldn't reach the site",

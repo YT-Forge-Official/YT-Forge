@@ -106,3 +106,4 @@ out/
 *.pdb
 *.7z
 *.tar.gz
+/dist/

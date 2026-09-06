@@ -65,8 +65,11 @@ linux:
     - AppImage
     - deb
   category: AudioVideo
+  # One standalone yt-dlp per CPU architecture, installed under the single
+  # name main.js looks for. ${arch} is x64 or arm64 (electron-builder's names,
+  # hence bin/yt-dlp_linux_x64 rather than yt-dlp's own "yt-dlp_linux").
   extraResources:
-    - from: bin/yt-dlp_linux
+    - from: bin/yt-dlp_linux_${arch}
       to: bin/yt-dlp_linux
 
 publish:

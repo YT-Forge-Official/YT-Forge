@@ -2,6 +2,16 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <!--
+      This page never talks to the network itself — every request goes through
+      the preload bridge to the main process — so connect/img/frame are all
+      denied. 'unsafe-eval' is the one allowance: BotGuard ships its VM as a
+      script string that has to be evaluated (see entry.js).
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-eval'; base-uri 'none'; form-action 'none'"
+    />
     <title>po-token</title>
   </head>
   <body>

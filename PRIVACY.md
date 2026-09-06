@@ -11,7 +11,9 @@ your data to go.
 Nothing about you or your downloads is ever sent anywhere.
 
 The app does make network requests, because a video downloader has to. All of
-them are listed below, and all of them can be verified by reading the source.
+them are listed below — the two at startup, the optional YouTube sign-in, the
+Google attestation some YouTube videos require, and thumbnails — and all of
+them can be verified by reading the source.
 
 ## Requests YT-Forge makes at startup
 
@@ -55,6 +57,40 @@ If you do sign in, you should know how it works:
   consequence, so it is worth stating plainly.
 - **Signing out deletes it.** YT-Forge clears your `youtube.com` and
   `google.com` cookies and deletes `youtube_cookies.txt` from disk.
+
+## YouTube "Proof of Origin" tokens (when a video needs one)
+
+YouTube refuses to serve some videos' streams unless the request carries a
+*Proof of Origin* token — most notably age-restricted videos when you are
+signed in. A token can only be produced by running Google's **BotGuard**
+attestation script, which is what youtube.com does in your browser on every
+visit.
+
+YT-Forge does the same thing, only when a video actually needs it: it runs
+BotGuard in an invisible window inside the app
+([`src/potoken/`](src/potoken/)) and hands the resulting token to yt-dlp.
+Videos that don't need one — the large majority — never trigger this.
+
+What that involves, concretely:
+
+- **Two requests to Google**, both to `jnn-pa.googleapis.com` (Google's
+  anti-abuse API), made from the app itself, not from a page you can see.
+  BotGuard is an obfuscated script that inspects the environment it runs in
+  (browser and runtime characteristics) to decide it is not a bot, and sends
+  Google an attestation of that. This is the *same* check every YouTube visitor
+  passes in a normal browser; YT-Forge adds nothing to it and cannot see what
+  the script reports, because the script is Google's and is opaque by design.
+- The invisible window is locked down: it can load only YT-Forge's own
+  bundled script, has no access to the network on its own (its requests are
+  routed through the app and restricted to Google's domains), and is destroyed
+  a few minutes after it is last used.
+- Your YouTube cookies are **not** sent to `jnn-pa.googleapis.com`; the token
+  is tied to the video's ID, not to your account.
+- No YT-Forge server is involved, and nothing is stored beyond the token
+  itself, which is kept in memory for at most an hour.
+
+Like any request it reveals your IP address to Google, and it is subject to
+[Google's privacy policy](https://policies.google.com/privacy).
 
 ## Video thumbnails
 

@@ -256,7 +256,7 @@ const SettingsDialog = () => {
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground leading-relaxed">
-                        Sign in to download <strong className="text-foreground/80 font-medium">age-restricted videos</strong>.<br/>
+                        Sign in to download <strong className="text-foreground/80 font-medium">age-restricted videos, private playlists, and to help on shared or VPN connections</strong>.<br/>
                         Everything else works without an account.
                       </p>
                     )}
