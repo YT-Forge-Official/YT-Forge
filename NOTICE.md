@@ -9,7 +9,7 @@ The components below are covered by their own licences, reproduced or referenced
 
 The initial project scaffold — an Electron Forge + Vite + React starter — was derived from
 [PikoCanFly/electron-react-vite-starter-project](https://github.com/PikoCanFly/electron-react-vite-starter-project),
-which is MIT licensed. The application itself was written by Suja Rahaman; the scaffold's
+which is MIT licensed. The scaffold's
 original notice is preserved below as required by the MIT License.
 
 MIT License

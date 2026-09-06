@@ -115,7 +115,7 @@ For a commercial licence, contact the author.
 
 ### Credits and third-party components
 
-The initial Electron + Vite + React scaffold was derived from [PikoCanFly/electron-react-vite-starter-project](https://github.com/PikoCanFly/electron-react-vite-starter-project) (MIT). The application itself was written by Suja Rahaman.
+The initial Electron + Vite + React scaffold was derived from [PikoCanFly/electron-react-vite-starter-project](https://github.com/PikoCanFly/electron-react-vite-starter-project) (MIT). 
 
 YT-Forge also bundles [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [FFmpeg / FFprobe](https://ffmpeg.org) (GPL-3.0-or-later), which it invokes as separate executables.
 
