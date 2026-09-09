@@ -348,6 +348,81 @@ nativeTheme.on('updated', () => {
   safeSend('appearance-changed', appearance);
 });
 
+// ---------------------------------------------------------------------------
+// Last-used save directory
+//
+// Every destination in the app is picked through a native dialog, and none of
+// them used to pass a directory — only a filename. That leaves the starting
+// folder entirely to the platform picker, which is fine on macOS and Windows
+// (both persist a per-app last-used directory) but not on Linux: the GTK
+// dialog only remembers for the lifetime of the process, and when the XDG
+// desktop portal serves the dialog the recall belongs to whichever portal
+// backend answered. An AppImage has no installed desktop entry for a backend
+// to key that memory against, so users re-navigated on every single save.
+//
+// So the app remembers it itself. The folder is recorded the moment a dialog
+// returns a path — not when the download finishes — because that is when the
+// OS would have recorded it: cancelling or failing a download still leaves
+// you where you last chose to be.
+//
+// This only *suggests* a starting folder. The dialog still opens, so renaming
+// and relocating on the fly work exactly as before, and a portal backend is
+// free to ignore the suggestion — nothing downstream depends on it.
+// ---------------------------------------------------------------------------
+const SAVE_DIR_KEY = 'lastSaveDirectory';
+
+/** Downloads, or the home directory on a platform that reports no Downloads. */
+function fallbackSaveDirectory() {
+  try {
+    return app.getPath('downloads');
+  } catch (e) {
+    return app.getPath('home');
+  }
+}
+
+/**
+ * The folder a save dialog should open in.
+ *
+ * The stored path is re-validated on every call rather than trusted: it may
+ * name an external drive that is no longer mounted, or a folder deleted since.
+ * A defaultPath inside a dead mount is worse than none at all, so anything
+ * unusable degrades silently to Downloads.
+ */
+function getSaveDirectory() {
+  const stored = store.get(SAVE_DIR_KEY);
+  if (typeof stored === 'string' && stored) {
+    try {
+      if (fs.statSync(stored).isDirectory()) return stored;
+    } catch (e) { /* gone, unmounted or unreadable — fall through */ }
+  }
+  return fallbackSaveDirectory();
+}
+
+/**
+ * A dialog `defaultPath`: the remembered folder plus the suggested filename.
+ * Safe to join — every caller passes a safeFileStem() result, which has had
+ * path separators stripped out of it.
+ */
+function defaultSavePath(filename) {
+  return path.join(getSaveDirectory(), filename);
+}
+
+/**
+ * Record where the user just chose to save. Takes a directory, so callers
+ * holding a file path pass its dirname.
+ *
+ * Persisting is best-effort: a read-only or full config directory must never
+ * turn a successful save into a failed one.
+ */
+function rememberSaveDirectory(dir) {
+  if (typeof dir !== 'string' || !dir) return;
+  try {
+    store.set(SAVE_DIR_KEY, dir);
+  } catch (e) {
+    console.warn('Could not persist last save directory:', e.message);
+  }
+}
+
 function createWindow() {
   nativeTheme.themeSource = getThemePreference();
   const { resolved } = getAppearance();
@@ -1666,11 +1741,14 @@ ipcMain.on("cancel-playlist-prefetch", () => {
 
 ipcMain.handle("choose-directory", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
+    defaultPath: getSaveDirectory(),
     properties: ['openDirectory', 'createDirectory']
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
   }
+  // The chosen folder IS the destination here, not the parent of one.
+  rememberSaveDirectory(result.filePaths[0]);
   return result.filePaths[0];
 });
 
@@ -1786,10 +1864,11 @@ ipcMain.handle("download-thumbnail", async (event, { url, title }) => {
   if (!url) return { success: false, error: 'No thumbnail URL.' };
   const safeTitle = safeFileStem(title, 'jpg');
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: 'Save Thumbnail', defaultPath: `${safeTitle}_thumbnail.jpg`,
+    title: 'Save Thumbnail', defaultPath: defaultSavePath(`${safeTitle}_thumbnail.jpg`),
     buttonLabel: 'Save Image', filters: [{ name: 'JPEG Image', extensions: ['jpg'] }]
   });
   if (canceled || !filePath) return { success: false, error: 'Save dialog was canceled.' };
+  rememberSaveDirectory(path.dirname(filePath));
   // Fetch inside the loop, write once after it: a disk error on the chosen
   // path is not a bad candidate and must not trigger four more downloads.
   let buf = null;
@@ -2848,13 +2927,14 @@ ipcMain.handle('queue-video', async (event, options) => {
 
   const dialogResult = await dialog.showSaveDialog(mainWindow, {
     title: `Save ${type.toUpperCase()}`,
-    defaultPath: `${safeTitle}.${ext}`,
+    defaultPath: defaultSavePath(`${safeTitle}.${ext}`),
     buttonLabel: "Save",
     filters: type === 'mp4' ? [{ name: "MPEG-4 Video", extensions: ["mp4"] }] : [{ name: "MP3 Audio", extensions: ["mp3"] }],
   });
   if (dialogResult.canceled || !dialogResult.filePath) {
     return { success: false, canceled: true, error: "Save dialog was canceled." };
   }
+  rememberSaveDirectory(path.dirname(dialogResult.filePath));
 
   const job = {
     id: `job-${++jobSeq}-${Date.now()}`,
