@@ -271,6 +271,11 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
   const [fileStatus, setFileStatus] = useState({}); // videoId/index -> bool
 
   const videos = playlist.downloadedVideos || [];
+  // Entries saved before numbering existed have no stored position — fall back
+  // to the order they were downloaded in so the list still reads cleanly. The
+  // digit count only fixes the column width; the numbers themselves are shown
+  // unpadded.
+  const numberDigits = String(videos.reduce((max, v, i) => Math.max(max, v.playlistIndex || i + 1), 0)).length;
 
   // Check which files still exist on disk (drives the folder icon behavior)
   useEffect(() => {
@@ -375,6 +380,11 @@ const PlaylistHistoryDetail = ({ playlist, onBack, onPlaylistUpdated }) => {
             const exists = fileStatus[v.id || i];
             return (
               <div key={`${v.id || i}-${playlist.timestamp}`} className="group flex items-center gap-3.5 p-2.5 rounded-xl border border-border/30 bg-secondary/10 hover:bg-secondary/25 hover:border-border/50 transition-all min-w-0">
+                {/* Playlist position */}
+                <span className={`shrink-0 -mr-[3px] text-center text-[11px] font-mono tabular-nums text-muted-soft select-none ${numberDigits >= 4 ? 'w-8' : 'w-6'}`}>
+                  {v.playlistIndex || i + 1}
+                </span>
+
                 {/* Thumbnail */}
                 <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30">
                   <img

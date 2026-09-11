@@ -341,6 +341,54 @@ ipcMain.handle('set-appearance', (event, preference) => {
   return appearance;
 });
 
+// ---------------------------------------------------------------------------
+// Sticky download options
+//
+// The toggles either side of a download — H.264 conversion, overwrite and
+// numbering above a playlist, H.264 conversion on a single video — remember
+// whatever was last used, across restarts. Read synchronously from the preload
+// so each view paints the remembered states on its first frame instead of
+// flipping a checkbox a moment later.
+//
+// The playlist and single-video H.264 toggles are stored separately on
+// purpose: converting a batch for an editing project shouldn't silently arm a
+// slow re-encode on every ad-hoc download afterwards.
+//
+// Quality is deliberately NOT sticky — it belongs to the video or playlist in
+// front of you, and silently reopening at "audio only" would be a trap.
+// ---------------------------------------------------------------------------
+const DOWNLOAD_OPTIONS_KEY = 'downloadOptions';
+const DOWNLOAD_OPTION_DEFAULTS = {
+  playlistConvertToH264: false,
+  playlistOverwriteFiles: false,
+  playlistNumberFiles: true,
+  videoConvertToH264: false,
+};
+
+const getDownloadOptions = () => {
+  const stored = store.get(DOWNLOAD_OPTIONS_KEY);
+  const saved = stored && typeof stored === 'object' ? stored : {};
+  // Per key, so a partial or hand-edited blob still yields a full, valid set.
+  return Object.fromEntries(
+    Object.entries(DOWNLOAD_OPTION_DEFAULTS).map(([key, fallback]) => [
+      key,
+      typeof saved[key] === 'boolean' ? saved[key] : fallback,
+    ])
+  );
+};
+
+ipcMain.on('get-download-options-sync', (event) => { event.returnValue = getDownloadOptions(); });
+ipcMain.handle('get-download-options', () => getDownloadOptions());
+ipcMain.handle('set-download-options', (event, options) => {
+  const incoming = options && typeof options === 'object' ? options : {};
+  const next = getDownloadOptions();
+  for (const key of Object.keys(DOWNLOAD_OPTION_DEFAULTS)) {
+    if (typeof incoming[key] === 'boolean') next[key] = incoming[key];
+  }
+  store.set(DOWNLOAD_OPTIONS_KEY, next);
+  return next;
+});
+
 // OS switched between light and dark — only meaningful while following it.
 nativeTheme.on('updated', () => {
   const appearance = getAppearance();
@@ -1443,8 +1491,8 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
     const fromYouTube = isYouTubeUrl(cleanUrl);
 
     const videos = entries
-      .filter(v => v.id && v.title && v.title !== '[Private video]' && v.title !== '[Deleted video]')
-      .map(v => {
+      .map((v, i) => {
+        if (!v.id || !v.title || v.title === '[Private video]' || v.title === '[Deleted video]') return null;
         // Only YouTube ids round-trip into a URL. For every other extractor a
         // missing entry URL means we have nothing to download from, so drop
         // the entry rather than fabricate a youtube.com link that 404s.
@@ -1453,6 +1501,10 @@ ipcMain.handle("get-playlist-info", async (event, url) => {
         if (!entryUrl) return null;
         return {
           id: v.id,
+          // 1-based position in the source playlist. Kept even when earlier
+          // entries were dropped (private/deleted), so the numbers a user sees
+          // here match the numbers on the site.
+          index: v.playlist_index || i + 1,
           url: entryUrl,
           title: v.title,
           duration: v.duration || 0,
@@ -2121,6 +2173,7 @@ function serializeJob(job) {
     base.currentIndex = job.currentIndex;
     base.items = job.items.map(it => ({
       id: it.id,
+      playlistIndex: it.playlistIndex || null,
       title: it.title,
       url: it.url,
       thumbnail: it.thumbnail,
@@ -2699,6 +2752,16 @@ function safeFileStem(title, ext) {
   return stem;
 }
 
+/**
+ * "01. " style filename prefix for a numbered playlist item. The width follows
+ * the largest index in the job (never below 2) so the files sort in playlist
+ * order in Finder/Explorer instead of 1, 10, 11, 2.
+ */
+function playlistNumberPrefix(job, item) {
+  if (!job.numberItems || !item.playlistIndex) return '';
+  return `${String(item.playlistIndex).padStart(job.numberPad || 2, '0')}. `;
+}
+
 /** Resolve the output path inside a target directory, handling duplicates. */
 function resolveOutputPath(targetDir, title, ext, allowDuplicates) {
   const safeTitle = safeFileStem(title, ext);
@@ -2756,6 +2819,7 @@ function addPlaylistHistoryItem(job) {
     timestamp: new Date().toISOString(),
     downloadedVideos: completed.map(v => ({
       id: v.id,
+      playlistIndex: v.playlistIndex || null,
       title: v.title,
       url: v.url,
       thumbnailUrl: v.thumbnail,
@@ -2830,7 +2894,8 @@ async function runPlaylistJob(job) {
     broadcastQueue();
 
     const ext = item.type === 'mp3' ? 'mp3' : 'mp4';
-    const filePath = resolveOutputPath(job.targetDir, item.title, ext, job.allowDuplicates);
+    const stem = playlistNumberPrefix(job, item) + item.title;
+    const filePath = resolveOutputPath(job.targetDir, stem, ext, job.allowDuplicates);
 
     const result = await runVideoDownload({
       url: item.url,
@@ -2963,9 +3028,11 @@ ipcMain.handle('queue-video', async (event, options) => {
 });
 
 ipcMain.handle('queue-playlist', async (event, options) => {
-  const { title, uploader, url, targetDir, allowDuplicates, formatLabel, items, thumbnailUrl } = options;
+  const { title, uploader, url, targetDir, allowDuplicates, formatLabel, items, thumbnailUrl, numberItems } = options;
   if (!targetDir) return { success: false, error: 'No destination folder selected.' };
   if (!Array.isArray(items) || items.length === 0) return { success: false, error: 'No videos selected.' };
+
+  const maxIndex = items.reduce((max, it) => Math.max(max, it.playlistIndex || 0), 0);
 
   const job = {
     id: `job-${++jobSeq}-${Date.now()}`,
@@ -2978,6 +3045,8 @@ ipcMain.handle('queue-playlist', async (event, options) => {
     thumbnailUrl: thumbnailUrl || items[0]?.thumbnail || '',
     targetDir,
     allowDuplicates: !!allowDuplicates,
+    numberItems: !!numberItems,
+    numberPad: Math.max(2, String(maxIndex).length),
     formatLabel: formatLabel || 'MP4',
     sizeBytes: items.reduce((acc, it) => acc + (it.sizeBytes || 0), 0),
     currentIndex: -1,
@@ -2985,6 +3054,7 @@ ipcMain.handle('queue-playlist', async (event, options) => {
     skipCurrent: false,
     items: items.map(it => ({
       id: it.id,
+      playlistIndex: it.playlistIndex || null,
       url: it.url,
       title: it.title,
       thumbnail: it.thumbnail,

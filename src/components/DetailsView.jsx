@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
+import { downloadOptions, rememberOptions } from '@/lib/downloadOptions';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Kbd } from '@/components/ui/kbd';
@@ -80,7 +81,8 @@ const DetailsView = () => {
   // only have one sensible output — offering MP4 would produce a soundtrack
   // sealed in a video container.
   const [selectedType, setSelectedType] = useState(details.isAudioOnly ? "mp3" : "mp4");
-  const [convertToH264, setConvertToH264] = useState(false);
+  // Sticky: whatever was last chosen here is what the next video opens with.
+  const [convertToH264, setConvertToH264] = useState(downloadOptions.videoConvertToH264);
   const [jobId, setJobId] = useState(boundJobId);
 
   // Re-bind when the view is re-opened from the active downloads list
@@ -111,6 +113,8 @@ const DetailsView = () => {
     if (job && job.kind === 'video') {
       if (job.quality) setSelectedQuality(String(job.quality));
       if (job.type) setSelectedType(job.type);
+      // Mirrors the job, so it deliberately does NOT update the stored
+      // preference — the user didn't choose this, the running job did.
       setConvertToH264(!!job.convertToH264);
     }
   }, [job?.id]);
@@ -330,7 +334,15 @@ const DetailsView = () => {
                     <span className="text-[13px] font-medium leading-none select-none group-hover:text-foreground transition-colors">Convert to H.264 (MP4)</span>
                     <span className="text-[11px] text-muted-foreground select-none leading-snug">Requires heavy CPU and extra processing time</span>
                   </div>
-                  <input type="checkbox" className="hidden" checked={convertToH264} onChange={(e) => setConvertToH264(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={convertToH264}
+                    onChange={(e) => {
+                      setConvertToH264(e.target.checked);
+                      rememberOptions({ videoConvertToH264: e.target.checked });
+                    }}
+                  />
                 </label>
 {/* 
                 {slowToConvert && convertToH264 && (

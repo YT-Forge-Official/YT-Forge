@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
+import { downloadOptions, rememberOptions } from '@/lib/downloadOptions';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -18,7 +19,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   ArrowLeft, Download, FolderOpen, CheckCircle2, AlertCircle,
-  Play, Pause, X, Clock, HardDrive, SkipForward, ListVideo, Info, ImageDown,
+  Play, Pause, X, Clock, HardDrive, SkipForward, ListVideo, ImageDown,
 } from 'lucide-react';
 import {
   Select,
@@ -75,6 +76,25 @@ const dedupeFormats = (formats) => {
 // Estimated size multiplier for the offline VP9/AV1 → H.264 conversion
 const H264_SIZE_FACTOR = 1.9;
 
+/** Digits in the largest position of a set — fixes the width of the number
+ *  column so every thumbnail in the list still starts at the same x. */
+const maxDigits = (indexes) => String(Math.max(0, ...indexes)).length;
+
+/** The item's position in the playlist, shown ahead of its thumbnail. Quiet on
+ *  purpose: it's a wayfinding aid, not a piece of data to read. Centred rather
+ *  than right-aligned so a 1-digit number sits as evenly in its gutter as a
+ *  3-digit one. */
+const ItemNumber = ({ index, digits }) => {
+  if (!index) return null;
+  return (
+    <span
+      className={`shrink-0 -mr-px text-center text-[11px] font-mono tabular-nums text-muted-soft select-none ${digits >= 4 ? 'w-8' : 'w-6'}`}
+    >
+      {index}
+    </span>
+  );
+};
+
 const PlaylistView = () => {
   const {
     playlistDetails,
@@ -99,9 +119,25 @@ const PlaylistView = () => {
   // ── Selection state ────────────────────────────────────────────────────────
   const [selectedVideos, setSelectedVideos] = useState(new Set(playlistDetails.videos.map(v => v.id)));
   const [globalQuality, setGlobalQuality] = useState('best');
-  const [globalH264, setGlobalH264] = useState(false);
-  // Overwrite is off by default — existing files get a " (n)" suffix instead
-  const [allowDuplicates, setAllowDuplicates] = useState(true);
+  const [globalH264, setGlobalH264] = useState(downloadOptions.playlistConvertToH264);
+  // allowDuplicates is the inverse of the "Overwrite files" checkbox: when
+  // duplicates are allowed an existing file gets a " (n)" suffix instead.
+  const [allowDuplicates, setAllowDuplicates] = useState(!downloadOptions.playlistOverwriteFiles);
+  // Prefix saved files with their playlist position ("01. Title.mp4")
+  const [numberFiles, setNumberFiles] = useState(downloadOptions.playlistNumberFiles);
+
+  const changeH264 = (value) => {
+    setGlobalH264(value);
+    rememberOptions({ playlistConvertToH264: value });
+  };
+  const changeOverwrite = (value) => {
+    setAllowDuplicates(!value);
+    rememberOptions({ playlistOverwriteFiles: value });
+  };
+  const changeNumberFiles = (value) => {
+    setNumberFiles(value);
+    rememberOptions({ playlistNumberFiles: value });
+  };
   const [videoFormats, setVideoFormats] = useState({});     // id -> { isLoading, formats, audioSize }
   const [videoQualities, setVideoQualities] = useState({}); // id -> explicit user choice
   const [videoH264, setVideoH264] = useState({});           // id -> bool (individual override)
@@ -202,6 +238,11 @@ const PlaylistView = () => {
     setSelectedVideos(next);
   };
 
+  const selectionDigits = useMemo(
+    () => maxDigits(playlistDetails.videos.map(v => v.index || 0)),
+    [playlistDetails.videos]
+  );
+
   const handleSelectAll = () => setSelectedVideos(new Set(playlistDetails.videos.map(v => v.id)));
   const handleSelectNone = () => setSelectedVideos(new Set());
 
@@ -232,6 +273,7 @@ const PlaylistView = () => {
         const isAudio = q === 'audio';
         return {
           id: v.id,
+          playlistIndex: v.index || null,
           url: v.url,
           title: v.title,
           thumbnail: v.thumbnail,
@@ -259,6 +301,7 @@ const PlaylistView = () => {
       url: playlistDetails.sourceUrl || '',
       targetDir,
       allowDuplicates,
+      numberItems: numberFiles,
       formatLabel,
       thumbnailUrl: items[0]?.thumbnail || '',
       items,
@@ -280,6 +323,7 @@ const PlaylistView = () => {
 
   const progress = (boundJobId && jobProgress[boundJobId]) || {};
   const items = boundJob?.items || itemsSnapshot;
+  const itemsDigits = maxDigits(items.map(it => it.playlistIndex || 0));
   const completedCount = items.filter(it => it.status === 'completed').length;
   const doneCount = items.filter(it => ['completed', 'error', 'skipped', 'cancelled'].includes(it.status)).length;
   const currentItem = boundJob?.status === 'downloading' ? items.find(it => it.status === 'downloading') : null;
@@ -484,8 +528,9 @@ const PlaylistView = () => {
               if (isCurrent) {
                 return (
                   <div key={it.id} className="flex flex-col gap-3 p-3 rounded-xl border bg-primary/[0.04] border-primary/40 transition-all duration-200">
-                    {/* Row 1 — thumbnail, title, skip */}
+                    {/* Row 1 — number, thumbnail, title, skip */}
                     <div className="flex items-center gap-3.5">
+                      <ItemNumber index={it.playlistIndex} digits={itemsDigits} />
                       {thumbnail}
                       {info}
                       <Button
@@ -558,6 +603,7 @@ const PlaylistView = () => {
                     ${['skipped', 'cancelled', 'error'].includes(rowState) ? 'opacity-45' : ''}
                   `}
                 >
+                  <ItemNumber index={it.playlistIndex} digits={itemsDigits} />
                   {thumbnail}
                   {info}
 
@@ -607,7 +653,7 @@ const PlaylistView = () => {
 
         <div className="ml-11 flex flex-col gap-2.5">
           {/* Options row */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select value={globalQuality} onValueChange={handleGlobalQualityChange}>
               <SelectTrigger className="w-44 h-9 text-xs font-medium bg-secondary/30 border-border/50 hover:bg-secondary/50 transition-colors shrink-0">
                 <SelectValue placeholder="Quality" />
@@ -627,28 +673,27 @@ const PlaylistView = () => {
             </Select>
 
             {/* Playlist-wide H.264 conversion */}
-            <label
-              className={`flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 transition-colors select-none
-                ${globalQuality === 'audio' ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}`}
-            >
-              <Checkbox
-                checked={globalH264}
-                disabled={globalQuality === 'audio'}
-                onCheckedChange={(c) => setGlobalH264(!!c)}
-                className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
-              />
-              <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
-                Convert to H.264
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-3.5 w-3.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors outline-none" />
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs max-w-60">
-                  Re-encodes VP9/AV1 videos to H.264 on-device after downloading, so they open in Premiere, Final Cut and iMovie. Only applies to videos that need it. Uses extra CPU and time.
-                </TooltipContent>
-              </Tooltip>
-            </label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label
+                  className={`flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 transition-colors select-none
+                    ${globalQuality === 'audio' ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}`}
+                >
+                  <Checkbox
+                    checked={globalH264}
+                    disabled={globalQuality === 'audio'}
+                    onCheckedChange={(c) => changeH264(!!c)}
+                    className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+                  />
+                  <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
+                    Convert to H.264
+                  </span>
+                </label>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs max-w-60">
+                Re-encodes VP9/AV1 videos to H.264 on-device after downloading, so they open in Premiere, Final Cut and iMovie. Only applies to videos that need it. Uses extra CPU and time.
+              </TooltipContent>
+            </Tooltip>
 
             {/* Overwrite */}
             <Tooltip>
@@ -656,7 +701,7 @@ const PlaylistView = () => {
                 <label className="flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer select-none">
                   <Checkbox
                     checked={!allowDuplicates}
-                    onCheckedChange={(c) => setAllowDuplicates(!c)}
+                    onCheckedChange={(c) => changeOverwrite(!!c)}
                     className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
                   />
                   <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
@@ -666,6 +711,25 @@ const PlaylistView = () => {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 If checked, existing files with the same name will be replaced.
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Number the saved files by playlist position */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer select-none">
+                  <Checkbox
+                    checked={numberFiles}
+                    onCheckedChange={(c) => changeNumberFiles(!!c)}
+                    className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
+                  />
+                  <span className="text-xs font-medium text-foreground/80 leading-none whitespace-nowrap">
+                    Number files
+                  </span>
+                </label>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs max-w-60">
+                Saves each file as "01. Title", "02. Title" and so on, so the folder keeps the playlist's order.
               </TooltipContent>
             </Tooltip>
           </div>
@@ -723,11 +787,22 @@ const PlaylistView = () => {
                 `}
               >
                 {/* Checkbox */}
-                <Checkbox
-                  checked={isSelected}
-                  onCheckedChange={() => toggleVideo(video.id)}
-                  className="cursor-pointer h-4 w-4 rounded-[4px] shrink-0"
-                />
+                {/* Playlist position, stacked over the checkbox. The column
+                    centres both on the same axis; -mr-px trims the 14px flex
+                    gap to the 13px the row's border + padding leave on the
+                    left, so the pair sits centred in its gutter. */}
+                <div className={`flex flex-col items-center justify-center gap-1.5 shrink-0 -mr-px ${selectionDigits >= 4 ? 'min-w-8' : 'min-w-6'}`}>
+                  {video.index ? (
+                    <span className="text-[11px] font-mono tabular-nums text-muted-soft select-none leading-none">
+                      {video.index}
+                    </span>
+                  ) : null}
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => toggleVideo(video.id)}
+                    className="cursor-pointer h-4 w-4 rounded-[4px] shrink-0"
+                  />
+                </div>
 
                 {/* Thumbnail */}
                 <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-secondary/30 border border-border/30 group">

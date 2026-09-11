@@ -59,6 +59,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // App version
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
 
+  // Download options (sticky checkbox states) — read synchronously at preload
+  // time so each view renders the remembered states on its first frame.
+  initialDownloadOptions: ipcRenderer.sendSync("get-download-options-sync"),
+  getDownloadOptions: () => ipcRenderer.invoke("get-download-options"),
+  setDownloadOptions: (options) => ipcRenderer.invoke("set-download-options", options),
+
   // Appearance — read synchronously at preload time so the renderer can paint
   // the right theme on its very first frame (no flash on startup).
   initialAppearance: ipcRenderer.sendSync("get-appearance-sync"),
