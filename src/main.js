@@ -355,24 +355,89 @@ ipcMain.handle('set-appearance', (event, preference) => {
 // slow re-encode on every ad-hoc download afterwards.
 //
 // Quality is deliberately NOT sticky — it belongs to the video or playlist in
-// front of you, and silently reopening at "audio only" would be a trap.
+// front of you, and silently reopening at "audio only" would be a trap. The
+// audio *container*, on the other hand, is a property of the user's workflow
+// (a DAW wants WAV every time), so it is remembered and shared by both views.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Audio output formats
+//
+// No site serves lossless audio — YouTube's best is Opus ~160k or AAC ~128k —
+// so WAV and FLAC cannot add quality that was never in the source. They exist
+// because they are *workflow* formats: DAWs, samplers and DJ software either
+// refuse MP3 or mis-sync on its VBR frames, and FLAC guarantees no further
+// generation loss when the file is edited later. The UI says so plainly rather
+// than letting the list imply an upgrade.
+//
+//   copy      the source stream can be remuxed untouched (no re-encode) when
+//             its codec already matches, so the download is faster AND better
+//             than a transcode. Only m4a gets this, and only from AAC sources.
+//   sortArg   which source stream to prefer. For the lossy targets we keep the
+//             historical AAC preference — it makes m4a a straight copy and
+//             leaves mp3 downloads byte-identical to previous builds. For the
+//             lossless targets nothing is copied either way, so prefer Opus:
+//             YouTube's 251 (~160k VBR) carries more than its 128k AAC twin,
+//             which is exactly what a file destined for further editing wants.
+//   quality   yt-dlp's --audio-quality. '0' means "best VBR" and is right for
+//             LAME. It is WRONG for AAC: it selects ffmpeg's VBR mode, which
+//             on a 128k MP3 source (SoundCloud) produced a 371 kbps file —
+//             three times the source bitrate, encoding nothing but transcode
+//             artefacts. A bitrate string instead pins `-b:a`, giving a
+//             deterministic 195 kbps there. Sites that already serve AAC are
+//             unaffected either way: the stream is copied and every encoder
+//             argument is ignored (verified byte-identical on YouTube).
+//
+//   ppArgs    extra ffmpeg arguments for the extraction step.
+//
+// FLAC needs `-sample_fmt s16` or ffmpeg writes **24-bit** output: it hands the
+// encoder the decoder's float samples, and the encoder picks the widest format
+// it supports. Those extra 8 bits are padding — the source is lossy, there is
+// no 24-bit information anywhere in the chain — but FLAC still has to store
+// them. Measured on a 30 s SoundCloud track: 5,453,994 bytes at 24-bit versus
+// 2,833,004 at 16-bit, i.e. the default was **93% larger for identical audio**,
+// and larger than the uncompressed WAV of the same track. WAV needs no such
+// argument; yt-dlp already asks for pcm_s16le.
+// ---------------------------------------------------------------------------
+const AUDIO_FORMATS = {
+  mp3:  { label: 'MP3',  dialogName: 'MP3 Audio',  sortArg: 'acodec:aac',  quality: '0' },
+  m4a:  { label: 'M4A',  dialogName: 'M4A Audio',  sortArg: 'acodec:aac',  quality: '192K' },
+  wav:  { label: 'WAV',  dialogName: 'WAV Audio',  sortArg: 'acodec:opus' },
+  flac: { label: 'FLAC', dialogName: 'FLAC Audio', sortArg: 'acodec:opus',
+          ppArgs: ['--postprocessor-args', 'ExtractAudio:-sample_fmt s16'] },
+};
+
+/** True for every audio-only output type; false for 'mp4'. */
+const isAudioType = (type) => Object.prototype.hasOwnProperty.call(AUDIO_FORMATS, type);
+
+/**
+ * Clamp a renderer-supplied output type to one we actually support.
+ *
+ * The type becomes both a file extension and a `--audio-format` argument, so
+ * it never reaches either without passing through here.
+ */
+const normalizeType = (type) => (type === 'mp4' || isAudioType(type) ? type : 'mp4');
+
 const DOWNLOAD_OPTIONS_KEY = 'downloadOptions';
 const DOWNLOAD_OPTION_DEFAULTS = {
   playlistConvertToH264: false,
   playlistOverwriteFiles: false,
   playlistNumberFiles: true,
   videoConvertToH264: false,
+  audioFormat: 'mp3',
 };
 
 const getDownloadOptions = () => {
   const stored = store.get(DOWNLOAD_OPTIONS_KEY);
   const saved = stored && typeof stored === 'object' ? stored : {};
   // Per key, so a partial or hand-edited blob still yields a full, valid set.
+  // Builds before audio formats shipped stored booleans only, so the string
+  // key simply falls through to its default on first read after upgrading.
   return Object.fromEntries(
     Object.entries(DOWNLOAD_OPTION_DEFAULTS).map(([key, fallback]) => [
       key,
-      typeof saved[key] === 'boolean' ? saved[key] : fallback,
+      key === 'audioFormat'
+        ? (AUDIO_FORMATS[saved[key]] ? saved[key] : fallback)
+        : (typeof saved[key] === 'boolean' ? saved[key] : fallback),
     ])
   );
 };
@@ -385,6 +450,7 @@ ipcMain.handle('set-download-options', (event, options) => {
   for (const key of Object.keys(DOWNLOAD_OPTION_DEFAULTS)) {
     if (typeof incoming[key] === 'boolean') next[key] = incoming[key];
   }
+  if (AUDIO_FORMATS[incoming.audioFormat]) next.audioFormat = incoming.audioFormat;
   store.set(DOWNLOAD_OPTIONS_KEY, next);
   return next;
 });
@@ -2020,7 +2086,7 @@ function removeWorkDir(workDir) {
  * preference, and codec preference wins over container convenience.
  */
 function buildFormatSelector(quality, type) {
-  if (type === 'mp3') {
+  if (isAudioType(type)) {
     return {
       // A muxed stream is a perfectly good source to extract audio from, and
       // on muxed-only sites it is the ONLY source — without the `/b` fallback
@@ -2030,8 +2096,9 @@ function buildFormatSelector(quality, type) {
       // compressed twin of each audio track (140-drc) whose measured bitrate
       // is a hair higher than the original's but whose `quality` is lower.
       // Sorting on bitrate promoted the squashed track over the real one; the
-      // default sort's `quality` key already knows better.
-      sortArg: 'acodec:aac',
+      // default sort's `quality` key already knows better. Which *codec* to
+      // prefer depends on the target — see AUDIO_FORMATS.
+      sortArg: AUDIO_FORMATS[type].sortArg,
     };
   }
 
@@ -2365,8 +2432,12 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
       // first fetch did. Videos that fetched normally add nothing here.
       args.push(...await ytDownloadArgs(url));
 
-      if (type === 'mp3') {
-        args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
+      if (isAudioType(type)) {
+        args.push('--extract-audio', '--audio-format', type);
+        // Only meaningful for the lossy encoders; WAV and FLAC ignore it.
+        const audioQuality = AUDIO_FORMATS[type].quality;
+        if (audioQuality) args.push('--audio-quality', audioQuality);
+        if (AUDIO_FORMATS[type].ppArgs) args.push(...AUDIO_FORMATS[type].ppArgs);
       } else {
         args.push('--merge-output-format', 'mp4');
       }
@@ -2398,7 +2469,7 @@ function runVideoDownloadCore({ url, quality, type, convertToH264, filePath, job
 
           if (line.includes('[download] Destination:')) {
             stageCount++;
-            if (type === 'mp3') {
+            if (isAudioType(type)) {
               downloadStage = 'audio';
             } else {
               downloadStage = stageCount === 1 ? 'video' : 'audio';
@@ -2788,7 +2859,7 @@ function describeQuality(qualityLabel, converted) {
 
 function addVideoHistoryItem(job, finalPath, converted) {
   const history = store.get('downloadHistory', []);
-  const label = job.type === 'mp3' ? 'AUDIO' : describeQuality(job.qualityLabel, converted);
+  const label = isAudioType(job.type) ? 'AUDIO' : describeQuality(job.qualityLabel, converted);
   const newHistoryItem = {
     id: job.videoId,
     title: job.title,
@@ -2825,8 +2896,8 @@ function addPlaylistHistoryItem(job) {
       thumbnailUrl: v.thumbnail,
       duration: v.duration,
       filePath: v.filePath,
-      format: v.type === 'mp3'
-        ? 'AUDIO (MP3)'
+      format: isAudioType(v.type)
+        ? `AUDIO (${AUDIO_FORMATS[v.type].label})`
         : `${describeQuality(v.qualityLabel, v.converted) || 'Best'} (MP4)`,
     })),
   };
@@ -2893,7 +2964,7 @@ async function runPlaylistJob(job) {
     item.status = 'downloading';
     broadcastQueue();
 
-    const ext = item.type === 'mp3' ? 'mp3' : 'mp4';
+    const ext = isAudioType(item.type) ? item.type : 'mp4';
     const stem = playlistNumberPrefix(job, item) + item.title;
     const filePath = resolveOutputPath(job.targetDir, stem, ext, job.allowDuplicates);
 
@@ -2984,8 +3055,11 @@ async function processQueue() {
 ipcMain.handle('get-queue', () => downloadQueue.map(serializeJob));
 
 ipcMain.handle('queue-video', async (event, options) => {
-  const { videoId, url, quality, qualityLabel, type, title, thumbnailUrl, convertToH264, sizeBytes, meta } = options;
-  const ext = type === 'mp4' ? 'mp4' : 'mp3';
+  const { videoId, url, quality, qualityLabel, title, thumbnailUrl, convertToH264, sizeBytes, meta } = options;
+  // The type picks the file extension and the yt-dlp `--audio-format`, so an
+  // unknown one must never get through.
+  const type = normalizeType(options.type);
+  const ext = type;
   // Same byte budget as resolveOutputPath: the dialog's default name becomes
   // the real filename, so an over-long one fails at write time, not here.
   const safeTitle = safeFileStem(title, ext);
@@ -2994,7 +3068,9 @@ ipcMain.handle('queue-video', async (event, options) => {
     title: `Save ${type.toUpperCase()}`,
     defaultPath: defaultSavePath(`${safeTitle}.${ext}`),
     buttonLabel: "Save",
-    filters: type === 'mp4' ? [{ name: "MPEG-4 Video", extensions: ["mp4"] }] : [{ name: "MP3 Audio", extensions: ["mp3"] }],
+    filters: [isAudioType(type)
+      ? { name: AUDIO_FORMATS[type].dialogName, extensions: [type] }
+      : { name: "MPEG-4 Video", extensions: ["mp4"] }],
   });
   if (dialogResult.canceled || !dialogResult.filePath) {
     return { success: false, canceled: true, error: "Save dialog was canceled." };
@@ -3016,7 +3092,7 @@ ipcMain.handle('queue-video', async (event, options) => {
     convertToH264: !!convertToH264,
     filePath: dialogResult.filePath,
     sizeBytes: sizeBytes || 0,
-    formatLabel: type === 'mp3' ? 'AUDIO (MP3)' : `${qualityLabel} (MP4)`,
+    formatLabel: isAudioType(type) ? `AUDIO (${AUDIO_FORMATS[type].label})` : `${qualityLabel} (MP4)`,
     meta: meta || null,
     progress: null,
   };
@@ -3061,7 +3137,7 @@ ipcMain.handle('queue-playlist', async (event, options) => {
       duration: it.duration || 0,
       quality: it.quality,
       qualityLabel: it.qualityLabel,
-      type: it.type || 'mp4',
+      type: normalizeType(it.type),
       convertToH264: !!it.convertToH264,
       sizeBytes: it.sizeBytes || 0,
       status: 'queued',

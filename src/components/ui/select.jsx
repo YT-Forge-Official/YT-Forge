@@ -2,6 +2,7 @@ import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;
@@ -59,8 +60,29 @@ const SelectScrollDownButton = React.forwardRef(
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName;
 
+/**
+ * `scrollable` swaps Radix's auto-scrolling arrow buttons for a real scrollbar.
+ *
+ * The default behaviour parks a chevron at each end of the list and scrolls
+ * while the pointer rests on it — there is nothing to grab, and moving the
+ * mouse away stops the scroll mid-list. That is fine for a menu that overflows
+ * by a row or two, and wrong for the quality lists, which carry every
+ * resolution plus four audio containers.
+ *
+ * `maxHeight` caps the container AND the scroll viewport from one value, so the
+ * two can't disagree. They must not: the container clips with `overflow-hidden`,
+ * so a viewport allowed to grow taller than it loses its last rows silently,
+ * with no scrollbar to reveal them — the exact bug this variant exists to
+ * prevent. It is applied inline, overriding the base `max-h-96`.
+ *
+ * The default is the smaller of 28rem and the room Radix reports below the
+ * trigger, which fits the longest list in the app (every resolution, plus four
+ * audio containers, plus "Custom") without scrolling when the window has room,
+ * and scrolls cleanly when it doesn't. A list that fits shows no scrollbar.
+ */
 const SelectContent = React.forwardRef(
-  ({ className, children, position = "popper", ...props }, ref) => (
+  ({ className, children, position = "popper", scrollable = false,
+     maxHeight = "min(28rem, var(--radix-select-content-available-height))", ...props }, ref) => (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         ref={ref}
@@ -72,18 +94,38 @@ const SelectContent = React.forwardRef(
         )}
         position={position}
         {...props}
+        style={scrollable ? { maxHeight, ...props.style } : props.style}
       >
-        <SelectScrollUpButton />
-        <SelectPrimitive.Viewport
-          className={cn(
-            "p-1",
-            position === "popper" &&
-              "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"
-          )}
-        >
-          {children}
-        </SelectPrimitive.Viewport>
-        <SelectScrollDownButton />
+        {scrollable ? (
+          <ScrollArea
+            type="auto"
+            style={{ "--select-scroll-max": maxHeight }}
+            className="[&>[data-radix-scroll-area-viewport]]:max-h-[var(--select-scroll-max)]"
+          >
+            <SelectPrimitive.Viewport
+              className={cn(
+                "p-1 overflow-visible!",
+                position === "popper" && "w-full min-w-[var(--radix-select-trigger-width)]"
+              )}
+            >
+              {children}
+            </SelectPrimitive.Viewport>
+          </ScrollArea>
+        ) : (
+          <>
+            <SelectScrollUpButton />
+            <SelectPrimitive.Viewport
+              className={cn(
+                "p-1",
+                position === "popper" &&
+                  "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"
+              )}
+            >
+              {children}
+            </SelectPrimitive.Viewport>
+            <SelectScrollDownButton />
+          </>
+        )}
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
   )

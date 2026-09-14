@@ -2,6 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
 import { downloadOptions, rememberOptions } from '@/lib/downloadOptions';
+import {
+  AUDIO_FORMAT_KEYS,
+  audioFormatLabel,
+  estimateAudioBytes,
+  isAudioType,
+} from '@/lib/audioFormats';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Kbd } from '@/components/ui/kbd';
@@ -77,10 +83,29 @@ const DetailsView = () => {
   const [selectedQuality, setSelectedQuality] = useState(
     String(details.formats[0]?.itag || "")
   );
+  // The audio container is sticky: someone who works in a DAW wants WAV every
+  // time, not once. It is remembered separately from the video/audio choice so
+  // that switching to MP4 and back doesn't reset it.
+  const [audioFormat, setAudioFormat] = useState(downloadOptions.audioFormat);
   // Sources with no video track at all (SoundCloud, Bandcamp, podcast feeds)
   // only have one sensible output — offering MP4 would produce a soundtrack
   // sealed in a video container.
-  const [selectedType, setSelectedType] = useState(details.isAudioOnly ? "mp3" : "mp4");
+  const [selectedType, setSelectedType] = useState(
+    details.isAudioOnly ? downloadOptions.audioFormat : "mp4"
+  );
+  const isAudio = isAudioType(selectedType);
+
+  const handleTypeChange = (value) => {
+    // The left-hand select only switches between video and audio; which audio
+    // container is a matter for the select next to it.
+    setSelectedType(value === 'audio' ? audioFormat : value);
+  };
+
+  const handleAudioFormatChange = (value) => {
+    setAudioFormat(value);
+    setSelectedType(value);
+    rememberOptions({ audioFormat: value });
+  };
   // Sticky: whatever was last chosen here is what the next video opens with.
   const [convertToH264, setConvertToH264] = useState(downloadOptions.videoConvertToH264);
   const [jobId, setJobId] = useState(boundJobId);
@@ -96,7 +121,7 @@ const DetailsView = () => {
   // audio-only source with MP4 still selected leaves the format dropdown
   // pointing at an option that is no longer in the list.
   useEffect(() => {
-    if (details.isAudioOnly) setSelectedType('mp3');
+    if (details.isAudioOnly) setSelectedType(audioFormat);
     setSelectedQuality(String(details.formats[0]?.itag || ''));
   }, [details.videoId, details.webpageUrl, details.isAudioOnly, details.formats]);
 
@@ -112,7 +137,10 @@ const DetailsView = () => {
   useEffect(() => {
     if (job && job.kind === 'video') {
       if (job.quality) setSelectedQuality(String(job.quality));
-      if (job.type) setSelectedType(job.type);
+      if (job.type) {
+        setSelectedType(job.type);
+        if (isAudioType(job.type)) setAudioFormat(job.type);
+      }
       // Mirrors the job, so it deliberately does NOT update the stored
       // preference — the user didn't choose this, the running job did.
       setConvertToH264(!!job.convertToH264);
@@ -125,38 +153,47 @@ const DetailsView = () => {
   }, [isQueued, activeJobs, jobId]);
 
   const isVP9 = useMemo(() => {
-    if (selectedType === 'mp3') return false;
+    if (isAudio) return false;
     const format = details.formats.find(f => String(f.itag) === selectedQuality);
     return format ? !format.isH264 : false;
-  }, [selectedQuality, selectedType, details.formats]);
+  }, [selectedQuality, isAudio, details.formats]);
 
   // Purely advisory: above 4K the re-encode runs at roughly 25 minutes per
   // minute of video. The conversion stays available — this only lets the user
   // know what they're committing to before they start it.
   const slowToConvert = useMemo(() => {
-    if (selectedType === 'mp3') return false;
+    if (isAudio) return false;
     const format = details.formats.find(f => String(f.itag) === selectedQuality);
     // `slowToConvert` is absent on entries cached by an older build; fall back
     // to the height we already have.
     if (!format) return false;
     return format.slowToConvert ?? format.height > 2160;
-  }, [selectedQuality, selectedType, details.formats]);
+  }, [selectedQuality, isAudio, details.formats]);
 
   const selectedFormat = useMemo(
     () => details.formats.find(f => String(f.itag) === selectedQuality),
     [details.formats, selectedQuality]
   );
 
+  const audioBytes = useMemo(
+    () => estimateAudioBytes(selectedType, details.duration, details.audioSize || 0),
+    [selectedType, details.duration, details.audioSize]
+  );
+
   const estimatedSize = useMemo(() => {
-    if (selectedType === 'mp3') {
-      return details.audioSizeFormatted || 'N/A';
+    if (isAudio) {
+      // Always approximate: mp3/m4a project from the source stream, which only
+      // equals the output where the stream is copied, and wav/flac project
+      // from duration. Whether a copy happens depends on the site.
+      if (!audioBytes) return 'N/A';
+      return `~${formatBytes(audioBytes)}`;
     }
     if (!selectedFormat || !selectedFormat.sizeFormatted) return "N/A";
     if (convertToH264 && isVP9 && selectedFormat.size > 0) {
       return `~${formatBytes(selectedFormat.size * 1.9)}`;
     }
     return selectedFormat.sizeFormatted;
-  }, [selectedType, selectedFormat, details.audioSizeFormatted, convertToH264, isVP9]);
+  }, [isAudio, selectedType, audioBytes, selectedFormat, convertToH264, isVP9]);
 
   // Clear the finished-state binding if the user changes format or quality
   useEffect(() => {
@@ -194,7 +231,7 @@ const DetailsView = () => {
       qualityLabel,
       type: selectedType,
       convertToH264: convertToH264 && isVP9,
-      sizeBytes: selectedType === 'mp3' ? (details.audioSize || 0) : (selectedFormat?.size || 0),
+      sizeBytes: isAudio ? audioBytes : (selectedFormat?.size || 0),
       // Snapshot of everything needed to restore this view from the queue
       meta: { ...details },
     };
@@ -278,35 +315,57 @@ const DetailsView = () => {
             {/* Format & Quality — equal grid */}
             <div className="grid grid-cols-2 gap-2.5">
               <Select
-                value={selectedType}
-                onValueChange={setSelectedType}
+                value={isAudio ? "audio" : "mp4"}
+                onValueChange={handleTypeChange}
                 disabled={isBusy}
               >
                 <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent scrollable>
                   {!details.isAudioOnly && <SelectItem value="mp4">MP4 (Video)</SelectItem>}
-                  <SelectItem value="mp3">MP3 (Audio)</SelectItem>
+                  <SelectItem value="audio">Audio</SelectItem>
                 </SelectContent>
               </Select>
 
-              <Select
-                value={selectedQuality}
-                onValueChange={setSelectedQuality}
-                disabled={isBusy || selectedType === "mp3" || details.formats.length === 0}
-              >
-                <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {details.formats.map((f) => (
-                    <SelectItem key={`${f.itag}-${f.fps || ''}`} value={String(f.itag)}>
-                      {f.quality}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* One control, two jobs: resolution for video, container for
+                  audio. Audio used to leave this select disabled and empty,
+                  which spent the same space on nothing. */}
+              {isAudio ? (
+                <Select
+                  value={selectedType}
+                  onValueChange={handleAudioFormatChange}
+                  disabled={isBusy}
+                >
+                  <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent scrollable>
+                    {AUDIO_FORMAT_KEYS.map((key) => (
+                      <SelectItem key={key} value={key}>
+                        {audioFormatLabel(key)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Select
+                  value={selectedQuality}
+                  onValueChange={setSelectedQuality}
+                  disabled={isBusy || details.formats.length === 0}
+                >
+                  <SelectTrigger className="h-9 bg-secondary/50 border-border/50 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent scrollable maxHeight="18rem">
+                    {details.formats.map((f) => (
+                      <SelectItem key={`${f.itag}-${f.fps || ''}`} value={String(f.itag)}>
+                        {f.quality}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             {/* VP9 compatibility note & Conversion Toggle */}

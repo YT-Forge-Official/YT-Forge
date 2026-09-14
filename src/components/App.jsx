@@ -109,7 +109,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
               className="group flex items-center gap-3.5 w-full text-left px-3 py-3 rounded-xl border border-transparent
                 hover:bg-secondary/40 hover:border-border/50
                 focus:outline-none focus:bg-secondary/40 focus:border-border/60 focus:ring-1 focus:ring-ring/40
-                active:scale-[0.995] transition-all duration-150 cursor-pointer"
+                transition-colors duration-150 cursor-pointer"
             >
               <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-background/60 border border-border/40 shrink-0 transition-colors group-hover:border-border/70">
                 <opt.icon className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" strokeWidth={1.75} />
@@ -126,7 +126,7 @@ const HybridPrompt = ({ url, onChoose, onCancel }) => {
 
               <div className="flex items-center gap-2 shrink-0">
                 <Kbd className="opacity-60 group-hover:opacity-100 transition-opacity">{opt.shortcut}</Kbd>
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 transition-all group-hover:text-muted-foreground group-hover:translate-x-0.5" />
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
               </div>
             </button>
           ))}

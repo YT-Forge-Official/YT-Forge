@@ -14,6 +14,7 @@ const DEFAULTS = {
   playlistOverwriteFiles: false,
   playlistNumberFiles: true,
   videoConvertToH264: false,
+  audioFormat: 'mp3',
 };
 
 export const downloadOptions = {

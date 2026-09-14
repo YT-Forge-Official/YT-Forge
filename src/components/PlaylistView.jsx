@@ -2,6 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { formatBytes } from '../utils/formatBytes';
 import { downloadOptions, rememberOptions } from '@/lib/downloadOptions';
+import {
+  AUDIO_FORMATS,
+  AUDIO_FORMAT_KEYS,
+  audioFormatLabel,
+  estimateAudioBytes,
+} from '@/lib/audioFormats';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -24,7 +30,10 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -94,6 +103,13 @@ const ItemNumber = ({ index, digits }) => {
     </span>
   );
 };
+
+// A quality token is either a resolution ('best', '1080', an itag) or an audio
+// container, tagged so one dropdown can carry both. Builds before audio
+// formats shipped used a bare 'audio', which still means MP3.
+const audioQuality = (format) => `audio-${format}`;
+const isAudioQuality = (q) => q === 'audio' || String(q).startsWith('audio-');
+const audioFormatOf = (q) => (String(q).startsWith('audio-') ? String(q).slice(6) : 'mp3');
 
 const PlaylistView = () => {
   const {
@@ -179,7 +195,7 @@ const PlaylistView = () => {
   const resolveQuality = useCallback((videoId) => {
     const explicit = videoQualities[videoId];
     if (explicit) return explicit;
-    if (globalQuality === 'audio') return 'audio';
+    if (isAudioQuality(globalQuality)) return globalQuality;
     const fmts = videoFormats[videoId]?.formats;
     if (globalQuality === 'best' || globalQuality === 'custom' || !fmts?.length) return 'best';
     const cap = parseInt(globalQuality);
@@ -192,7 +208,7 @@ const PlaylistView = () => {
 
   const resolveFormat = useCallback((videoId) => {
     const q = resolveQuality(videoId);
-    if (q === 'audio') return null;
+    if (isAudioQuality(q)) return null;
     const fmts = videoFormats[videoId]?.formats;
     if (!fmts?.length) return null;
     if (q === 'best') return fmts[0];
@@ -202,7 +218,7 @@ const PlaylistView = () => {
   // Whether H.264 conversion will actually run for this video
   const effectiveConvert = useCallback((videoId) => {
     const q = resolveQuality(videoId);
-    if (q === 'audio') return false;
+    if (isAudioQuality(q)) return false;
     const fmt = resolveFormat(videoId);
     if (!fmt || fmt.isH264) return false;
     return globalH264 || !!videoH264[videoId];
@@ -212,15 +228,21 @@ const PlaylistView = () => {
   const itemSizeBytes = useCallback((videoId) => {
     const entry = videoFormats[videoId];
     const q = resolveQuality(videoId);
-    if (q === 'audio') return entry?.audioSize || 0;
+    if (isAudioQuality(q)) {
+      const duration = playlistDetails.videos.find(v => v.id === videoId)?.duration || 0;
+      return estimateAudioBytes(audioFormatOf(q), duration, entry?.audioSize || 0);
+    }
     const fmt = resolveFormat(videoId);
     if (!fmt || !(fmt.size > 0)) return 0;
     const base = fmt.size + (entry?.audioSize || 0);
     return effectiveConvert(videoId) ? Math.round(base * H264_SIZE_FACTOR) : base;
-  }, [videoFormats, resolveQuality, resolveFormat, effectiveConvert]);
+  }, [videoFormats, resolveQuality, resolveFormat, effectiveConvert, playlistDetails.videos]);
 
   const handleGlobalQualityChange = (val) => {
     if (val === 'custom') return; // display-only
+    // Shared with the single-video view: one remembered audio container, so a
+    // user who works in FLAC gets FLAC wherever they download from.
+    if (isAudioQuality(val)) rememberOptions({ audioFormat: audioFormatOf(val) });
     setGlobalQuality(val);
     setVideoQualities({});
     setVideoH264({});
@@ -270,7 +292,7 @@ const PlaylistView = () => {
       .map(v => {
         const q = resolveQuality(v.id);
         const fmt = resolveFormat(v.id);
-        const isAudio = q === 'audio';
+        const isAudio = isAudioQuality(q);
         return {
           id: v.id,
           playlistIndex: v.index || null,
@@ -278,19 +300,26 @@ const PlaylistView = () => {
           title: v.title,
           thumbnail: v.thumbnail,
           duration: v.duration,
-          type: isAudio ? 'mp3' : 'mp4',
+          type: isAudio ? audioFormatOf(q) : 'mp4',
           // "best" must resolve to the video's actual top height — passing the
           // literal string made yt-dlp's fallback chain pick 1080p H.264 even
           // for 4K videos.
           quality: isAudio ? 'best' : (q === 'best' && fmt ? String(fmt.itag) : q),
-          qualityLabel: isAudio ? 'MP3' : (fmt?.quality || 'Best'),
+          qualityLabel: isAudio ? AUDIO_FORMATS[audioFormatOf(q)].label : (fmt?.quality || 'Best'),
           convertToH264: effectiveConvert(v.id),
           sizeBytes: itemSizeBytes(v.id),
         };
       });
 
+    // Derived from the items, not the header: individual rows can each name a
+    // different container, and "Custom (MP4)" on a folder full of FLAC would
+    // be simply wrong.
+    const audioTypes = new Set(items.filter(it => it.type !== 'mp4').map(it => it.type));
+    const allAudio = audioTypes.size > 0 && audioTypes.size === new Set(items.map(it => it.type)).size;
     const formatLabel =
-      globalQuality === 'audio' ? 'AUDIO (MP3)'
+      allAudio && audioTypes.size === 1 ? `AUDIO (${AUDIO_FORMATS[[...audioTypes][0]].label})`
+        : allAudio ? 'AUDIO (Mixed)'
+        : audioTypes.size > 0 ? 'Mixed'
         : globalQuality === 'best' ? 'Best (MP4)'
         : globalQuality === 'custom' ? 'Custom (MP4)'
         : `Up to ${globalQuality}p (MP4)`;
@@ -658,7 +687,7 @@ const PlaylistView = () => {
               <SelectTrigger className="w-44 h-9 text-xs font-medium bg-secondary/30 border-border/50 hover:bg-secondary/50 transition-colors shrink-0">
                 <SelectValue placeholder="Quality" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent scrollable>
                 {globalQuality === 'custom' && <SelectItem value="custom" className="text-xs italic">Custom</SelectItem>}
                 <SelectItem value="best" className="text-xs">Best Available</SelectItem>
                 <SelectItem value="2160" className="text-xs">4K (2160p)</SelectItem>
@@ -668,7 +697,17 @@ const PlaylistView = () => {
                 <SelectItem value="480" className="text-xs">480p</SelectItem>
                 <SelectItem value="360" className="text-xs">360p</SelectItem>
                 <SelectItem value="240" className="text-xs">240p</SelectItem>
-                <SelectItem value="audio" className="text-xs">Audio only (MP3)</SelectItem>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Audio only
+                  </SelectLabel>
+                  {AUDIO_FORMAT_KEYS.map(key => (
+                    <SelectItem key={key} value={audioQuality(key)} className="text-xs">
+                      {audioFormatLabel(key)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
 
@@ -677,11 +716,11 @@ const PlaylistView = () => {
               <TooltipTrigger asChild>
                 <label
                   className={`flex items-center gap-2 h-9 px-3 rounded-md border border-border/50 bg-secondary/30 transition-colors select-none
-                    ${globalQuality === 'audio' ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}`}
+                    ${isAudioQuality(globalQuality) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}`}
                 >
                   <Checkbox
                     checked={globalH264}
-                    disabled={globalQuality === 'audio'}
+                    disabled={isAudioQuality(globalQuality)}
                     onCheckedChange={(c) => changeH264(!!c)}
                     className="h-3.5 w-3.5 rounded-[3px] cursor-pointer"
                   />
@@ -775,7 +814,7 @@ const PlaylistView = () => {
             const fmts = entry?.formats || [];
             const effQuality = resolveQuality(video.id);
             const effFormat = resolveFormat(video.id);
-            const showH264 = effQuality !== 'audio' && !!effFormat && !effFormat.isH264;
+            const showH264 = !isAudioQuality(effQuality) && !!effFormat && !effFormat.isH264;
             const size = itemSizeBytes(video.id);
             const converted = effectiveConvert(video.id);
 
@@ -863,7 +902,7 @@ const PlaylistView = () => {
                         <SelectTrigger className="w-full h-8 text-[11px] bg-secondary/25 hover:bg-secondary/45 border-border/40 transition-colors px-2.5">
                           <SelectValue placeholder="Quality" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent scrollable maxHeight="18rem">
                           <SelectItem value="best" className="text-[11px]">
                             {fmts.length > 0 ? `Best · ${fmts[0].quality}` : 'Best Available'}
                           </SelectItem>
@@ -872,7 +911,17 @@ const PlaylistView = () => {
                               {f.quality}
                             </SelectItem>
                           ))}
-                          <SelectItem value="audio" className="text-[11px]">Audio only</SelectItem>
+                          <SelectSeparator />
+                          <SelectGroup>
+                            <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                              Audio only
+                            </SelectLabel>
+                            {AUDIO_FORMAT_KEYS.map(key => (
+                              <SelectItem key={key} value={audioQuality(key)} className="text-[11px]">
+                                {audioFormatLabel(key)}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
                         </SelectContent>
                       </Select>
 
