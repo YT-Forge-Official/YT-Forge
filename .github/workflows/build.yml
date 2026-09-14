@@ -79,3 +79,13 @@ jobs:
           # 2. CHANGE TO secrets.GITHUB_TOKEN
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ${{ matrix.script }} -- -p always
+
+      - name: Upload Artifacts (Fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: YT-Forge-Builds-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+          retention-days: 5
