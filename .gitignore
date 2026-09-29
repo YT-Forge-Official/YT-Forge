@@ -107,3 +107,6 @@ out/
 *.7z
 *.tar.gz
 /dist/
+
+# Local-only architecture docs (not for publication)
+docs/internals/

@@ -1,3 +1,36 @@
+// stdout/stderr can disappear while the app keeps running: an AppImage started
+// from a terminal that is then closed, a desktop launcher that closes the pipe,
+// a logging socket that goes away. The next console.log then throws EPIPE,
+// which nothing catches, and Electron shows a fatal "JavaScript error in the
+// main process" dialog even though downloads are working fine. Logging is a
+// debugging convenience, so drop writes to a dead stream instead of crashing.
+const isBrokenPipe = (err) => {
+  const code = err && err.code;
+  return code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED' || code === 'ECONNRESET';
+};
+
+for (const stream of [process.stdout, process.stderr]) {
+  if (!stream) continue;
+  // Async path: the write fails later and the stream emits 'error'.
+  if (typeof stream.on === 'function') {
+    stream.on('error', (err) => {
+      if (!isBrokenPipe(err)) throw err;
+    });
+  }
+  // Sync path: the write throws straight out of console.log.
+  if (typeof stream.write === 'function') {
+    const originalWrite = stream.write.bind(stream);
+    stream.write = (...args) => {
+      try {
+        return originalWrite(...args);
+      } catch (err) {
+        if (isBrokenPipe(err)) return true;
+        throw err;
+      }
+    };
+  }
+}
+
 const { app, BrowserWindow, ipcMain, dialog, shell, net, session, nativeTheme } = require("electron");
 const path = require("path");
 const fs = require("fs");
