@@ -178,6 +178,7 @@ const PlaylistView = () => {
           isLoading: false,
           formats: res.success ? dedupeFormats(res.formats) : [],
           audioSize: res.audioSize || 0,
+          title: res.success ? res.title : undefined,
         },
       }));
     });
@@ -205,6 +206,10 @@ const PlaylistView = () => {
     // asking for a low cap should never hand back the largest file.
     return String((match || fmts[fmts.length - 1]).itag);
   }, [videoQualities, globalQuality, videoFormats]);
+
+  // The listing's title can be YouTube's English translation; the prefetch
+  // brings back the creator's original, which single videos already use.
+  const titleOf = (video) => videoFormats[video.id]?.title || video.title;
 
   const resolveFormat = useCallback((videoId) => {
     const q = resolveQuality(videoId);
@@ -297,7 +302,7 @@ const PlaylistView = () => {
           id: v.id,
           playlistIndex: v.index || null,
           url: v.url,
-          title: v.title,
+          title: titleOf(v),
           thumbnail: v.thumbnail,
           duration: v.duration,
           type: isAudio ? audioFormatOf(q) : 'mp4',
@@ -855,7 +860,7 @@ const PlaylistView = () => {
                       e.stopPropagation();
                       window.electronAPI.downloadThumbnail({
                         url: video.thumbnail,
-                        title: video.title,
+                        title: titleOf(video),
                       });
                     }}
                     title="Download Thumbnail"
@@ -869,9 +874,9 @@ const PlaylistView = () => {
                   <h3
                     className="font-medium text-[13px] truncate cursor-pointer hover:text-primary transition-colors leading-snug"
                     onClick={() => window.electronAPI.openExternalLink(video.url)}
-                    title={video.title}
+                    title={titleOf(video)}
                   >
-                    {video.title}
+                    {titleOf(video)}
                   </h3>
                   <div className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted-foreground">
                     <p className="truncate">{video.uploader}</p>

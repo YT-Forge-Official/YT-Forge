@@ -1550,7 +1550,7 @@ ipcMain.handle("get-video-info", async (event, url) => {
     }
     videoInfoCache.set(cacheKey, { t: Date.now(), payload });
     // The playlist view can reuse the derived formats for this video for free
-    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize, isAudioOnly });
+    if (info.id) cacheFormats(info.id, { success: true, formats, audioSize, isAudioOnly, title: info.title });
 
     return payload;
   } catch (error) {
@@ -1667,7 +1667,8 @@ function killPrefetchProcs() {
 // ── Format cache ────────────────────────────────────────────────────────────
 // Only derived metadata (heights, fps, codec flags, byte sizes) is stored —
 // no stream URLs — so entries stay valid for a long time and survive restarts.
-const FORMAT_CACHE_KEY = 'formatCacheV1';
+// V2 added the original title; V1 entries lack it and are dropped on load.
+const FORMAT_CACHE_KEY = 'formatCacheV2';
 const FORMAT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // ~800 bytes/entry, and electron-store writes synchronously on the main
 // thread — 500 keeps each write well under half a megabyte.
@@ -1680,6 +1681,7 @@ const formatCache = new Map(); // videoId -> { success, formats, audioSize, t }
 
 (function loadFormatCache() {
   try {
+    store.delete('formatCacheV1');
     const now = Date.now();
     for (const [id, v] of Object.entries(store.get(FORMAT_CACHE_KEY, {}) || {})) {
       if (v && v.t && Array.isArray(v.formats) && now - v.t < FORMAT_CACHE_TTL_MS) {
@@ -1771,7 +1773,11 @@ function streamFormatsBatch(videos, token, onRetry) {
           if (!id) continue;
           received.add(id);
           const { formats, audioSize, isAudioOnly } = extractFormats(info);
-          const result = { success: true, formats, audioSize, isAudioOnly };
+          // A full extraction returns the creator's original title, while the
+          // --flat-playlist listing returns YouTube's translation for yt-dlp's
+          // default language (English) wherever the creator added one. The
+          // renderer swaps the listing title for this one.
+          const result = { success: true, formats, audioSize, isAudioOnly, title: info.title };
           // A stripped "basic" response is worth a targeted retry later, but
           // still send it now so the row becomes interactive immediately.
           // Only YouTube has a second player client to retry against, and only
@@ -1876,7 +1882,7 @@ ipcMain.handle("prefetch-playlist-formats", async (event, videos) => {
       const { formats, audioSize, isAudioOnly } = extractFormats(info);
       if (formats.length === 0 && !isAudioOnly) { failed(); continue; }
       rememberClientOverride(v.url, v.clients);
-      const result = { success: true, formats, audioSize, isAudioOnly };
+      const result = { success: true, formats, audioSize, isAudioOnly, title: info.title };
       cacheFormats(v.id, result);
       if (token === prefetchToken) safeSend('playlist-format-result', { id: v.id, ...result });
     } catch (e) { failed(); }
