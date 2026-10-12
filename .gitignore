@@ -110,3 +110,5 @@ out/
 
 # Local-only architecture docs (not for publication)
 docs/internals/
+
+brag-output
